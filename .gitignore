@@ -1,0 +1,13 @@
+/target
+**/*.rs.bk
+Cargo.lock
+
+guide/build/
+/gh-pages
+
+*.so
+*.out
+*.pyc
+*.pid
+*.sock
+*~
