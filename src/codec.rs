@@ -147,10 +147,16 @@ impl TryFrom<Value> for ByteString {
     type Error = Error;
 
     fn try_from(val: Value) -> Result<Self, Self::Error> {
-        if let Value::String(string) = val {
-            Ok(string)
-        } else {
-            Err(Error::Decode("Cannot convert into a string", val))
+        match val {
+            Value::String(val) => Ok(val),
+            Value::Bytes(val) => {
+                if let Ok(val) = ByteString::try_from(val) {
+                    Ok(val)
+                } else {
+                    Err(Error::Decode("Cannot convert into a string", Value::Nil))
+                }
+            }
+            _ => Err(Error::Decode("Cannot convert into a string", val)),
         }
     }
 }
@@ -357,25 +363,31 @@ impl_fromresp_integers!(isize, usize, i32, u32, u64);
 
 impl From<ByteString> for Value {
     fn from(val: ByteString) -> Value {
-        Value::String(val)
+        Value::Bytes(val.into_inner())
     }
 }
 
 impl From<String> for Value {
     fn from(val: String) -> Value {
-        Value::String(ByteString::from(val))
+        Value::Bytes(Bytes::from(val))
     }
 }
 
 impl<'a> From<&'a String> for Value {
     fn from(val: &'a String) -> Value {
-        Value::String(ByteString::from(val.as_str()))
+        Value::Bytes(Bytes::copy_from_slice(val.as_ref()))
     }
 }
 
 impl<'a> From<&'a str> for Value {
     fn from(val: &'a str) -> Value {
-        Value::String(ByteString::from(val))
+        Value::Bytes(Bytes::copy_from_slice(val.as_bytes()))
+    }
+}
+
+impl<'a> From<&&'a str> for Value {
+    fn from(val: &&'a str) -> Value {
+        Value::Bytes(Bytes::copy_from_slice(val.as_bytes()))
     }
 }
 
@@ -609,22 +621,17 @@ mod tests {
     fn test_array_macro() {
         let resp_object = array!["SET", "x"];
         let bytes = obj_to_bytes(resp_object);
-        assert_eq!(b"*2\r\n+SET\r\n+x\r\n", bytes.as_slice());
-
-        let resp_object = array![b"SET".as_ref(), b"x".as_ref()];
-        let bytes = obj_to_bytes(resp_object);
         assert_eq!(b"*2\r\n$3\r\nSET\r\n$1\r\nx\r\n", bytes.as_slice());
 
-        let resp_object =
-            array![b"RPUSH".as_ref(), b"wyz".as_ref()].append(vec![b"a".as_ref(), b"b".as_ref()]);
+        let resp_object = array!["RPUSH", "wyz"].append(vec!["a", "b"]);
         let bytes = obj_to_bytes(resp_object);
         assert_eq!(
             b"*4\r\n$5\r\nRPUSH\r\n$3\r\nwyz\r\n$1\r\na\r\n$1\r\nb\r\n".as_ref(),
             bytes.as_slice()
         );
 
-        let vals = vec![Bytes::from_static(b"a"), Bytes::from_static(b"b")];
-        let resp_object = array![b"RPUSH".as_ref(), b"xyz".as_ref()].append(&vals);
+        let vals = vec!["a", "b"];
+        let resp_object = array!["RPUSH", "xyz"].append(&vals);
         let bytes = obj_to_bytes(resp_object);
         assert_eq!(
             &b"*4\r\n$5\r\nRPUSH\r\n$3\r\nxyz\r\n$1\r\na\r\n$1\r\nb\r\n"[..],
