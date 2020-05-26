@@ -1,25 +1,14 @@
 //! Redis client for ntex framework.
+mod client;
+pub mod cmd;
 mod codec;
+mod connector;
+pub mod errors;
+mod transport;
 
-pub use self::codec::{Codec, Value};
-
-#[derive(Debug)]
-pub enum Error {
-    /// A RESP parsing error occurred
-    Parse(String),
-
-    /// A RESP deserialising error occurred
-    Decode(&'static str, codec::Value),
-
-    /// An IO error occurred
-    Io(std::io::Error),
-}
-
-impl From<std::io::Error> for Error {
-    fn from(err: std::io::Error) -> Error {
-        Error::Io(err)
-    }
-}
+pub use self::client::Client;
+pub use self::codec::{Codec, Request, Response};
+pub use self::connector::RedisConnector;
 
 /// Macro to create a RESP array, useful for preparing commands to send.  Elements can be any type, or a mixture
 /// of types, that satisfy `Into<Value>`.
@@ -47,12 +36,12 @@ impl From<std::io::Error> for Error {
 ///
 /// fn main() {
 ///     let data = vec!["data", "from", "somewhere", "else"];
-///     let command = array!["RPUSH", "mykey"].append(data);
+///     let command = array!["RPUSH", "mykey"].extend(data);
 /// }
 /// ```
 #[macro_export]
 macro_rules! array {
     ($($e:expr),*) => {{
-        $crate::Value::Array(vec![$($e.into(),)*])
+        $crate::Request::Array(vec![$($e.into(),)*])
     }}
 }

@@ -18,41 +18,35 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use bytestring::ByteString;
 use ntex_codec::{Decoder, Encoder};
 
-use super::Error;
+use super::errors::Error;
 
 /// Codec to read/write redis values
 pub struct Codec;
 
 impl Encoder for Codec {
-    type Item = Value;
+    type Item = Request;
     type Error = Error;
 
-    fn encode(&mut self, msg: Value, buf: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, msg: Request, buf: &mut BytesMut) -> Result<(), Self::Error> {
         match msg {
-            Value::Nil => {
-                write_header(b'$', -1, buf, 0);
-            }
-            Value::Array(ary) => {
+            Request::Array(ary) => {
                 write_header(b'*', ary.len() as i64, buf, 0);
                 for v in ary {
                     self.encode(v, buf)?;
                 }
             }
-            Value::Bytes(bstr) => {
+            Request::Bytes(bstr) => {
                 let len = bstr.len();
                 write_header(b'$', len as i64, buf, len + 2);
                 buf.extend(bstr);
                 write_rn(buf);
             }
-            Value::String(ref string) => {
+            Request::String(ref string) => {
                 write_string(b'+', string, buf);
             }
-            Value::Integer(val) => {
+            Request::Integer(val) => {
                 // Simple integer are just the header
                 write_header(b':', val, buf, 0);
-            }
-            Value::Error(ref string) => {
-                write_string(b'-', string, buf);
             }
         }
         Ok(())
@@ -60,7 +54,7 @@ impl Encoder for Codec {
 }
 
 impl Decoder for Codec {
-    type Item = Value;
+    type Item = Response;
     type Error = Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
@@ -74,16 +68,78 @@ impl Decoder for Codec {
     }
 }
 
+/// A single RESP value, this owns the data that is to-be written to Redis.
+///
+/// It is cloneable to allow multiple copies to be delivered in certain circumstances, e.g. multiple
+/// subscribers to the same topic.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum Request {
+    /// Zero, one or more other `Reqeests`s.
+    Array(Vec<Request>),
+
+    /// A bulk string. In Redis terminology a string is a byte-array, so this is stored as a
+    /// vector of `u8`s to allow clients to interpret the bytes as appropriate.
+    Bytes(Bytes),
+
+    /// A valid utf-8 string
+    String(ByteString),
+
+    /// Redis documentation defines an integer as being a signed 64-bit integer:
+    /// https://redis.io/topics/protocol#resp-integers
+    Integer(i64),
+}
+
+impl Request {
+    #[allow(clippy::should_implement_trait)]
+    /// Convenience function for building dynamic Redis commands with variable numbers of
+    /// arguments, e.g. RPUSH
+    ///
+    /// Self get converted to array if it is not an array.
+    pub fn add<T>(mut self, other: T) -> Self
+    where
+        Request: From<T>,
+    {
+        match self {
+            Request::Array(ref mut vals) => {
+                vals.push(other.into());
+                self
+            }
+            _ => Request::Array(vec![self, other.into()]),
+        }
+    }
+
+    /// Convenience function for building dynamic Redis commands with variable numbers of
+    /// arguments, e.g. RPUSH
+    ///
+    /// Self get converted to array if it is not an array.
+    pub fn extend<T>(mut self, other: impl IntoIterator<Item = T>) -> Self
+    where
+        Request: From<T>,
+    {
+        match self {
+            Request::Array(ref mut vals) => {
+                vals.extend(other.into_iter().map(|t| t.into()));
+                self
+            }
+            _ => {
+                let mut vals = vec![self];
+                vals.extend(other.into_iter().map(|t| t.into()));
+                Request::Array(vals)
+            }
+        }
+    }
+}
+
 /// A single RESP value, this owns the data that is read/to-be written to Redis.
 ///
 /// It is cloneable to allow multiple copies to be delivered in certain circumstances, e.g. multiple
 /// subscribers to the same topic.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum Value {
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum Response {
     Nil,
 
-    /// Zero, one or more other `Value`s.
-    Array(Vec<Value>),
+    /// Zero, one or more other `Response`s.
+    Array(Vec<Response>),
 
     /// A bulk string. In Redis terminology a string is a byte-array, so this is stored as a
     /// vector of `u8`s to allow clients to interpret the bytes as appropriate.
@@ -100,96 +156,75 @@ pub enum Value {
     Integer(i64),
 }
 
-impl Value {
-    /// Convenience function for building dynamic Redis commands with variable numbers of
-    /// arguments, e.g. RPUSH
-    ///
-    /// Self get converted to array if it is not an array.
-    pub fn append<T>(mut self, other: impl IntoIterator<Item = T>) -> Self
-    where
-        Value: From<T>,
-    {
-        match self {
-            Value::Array(ref mut vals) => {
-                vals.extend(other.into_iter().map(|t| t.into()));
-                self
-            }
-            _ => {
-                let mut vals = vec![self];
-                vals.extend(other.into_iter().map(|t| t.into()));
-                Value::Array(vals)
-            }
-        }
-    }
-
+impl Response {
     /// Extract redis server error to Result
-    pub fn into_result(self) -> Result<Value, ByteString> {
+    pub fn into_result(self) -> Result<Response, ByteString> {
         match self {
-            Value::Error(val) => Err(val),
+            Response::Error(val) => Err(val),
             val => Ok(val),
         }
     }
 }
 
-impl TryFrom<Value> for Bytes {
-    type Error = Error;
+impl TryFrom<Response> for Bytes {
+    type Error = (&'static str, Response);
 
-    fn try_from(val: Value) -> Result<Self, Self::Error> {
-        if let Value::Bytes(bytes) = val {
+    fn try_from(val: Response) -> Result<Self, Self::Error> {
+        if let Response::Bytes(bytes) = val {
             Ok(bytes)
         } else {
-            Err(Error::Decode("Not a bulk string", val))
+            Err(("Not a bytes object", val))
         }
     }
 }
 
-impl TryFrom<Value> for ByteString {
-    type Error = Error;
+impl TryFrom<Response> for ByteString {
+    type Error = (&'static str, Response);
 
-    fn try_from(val: Value) -> Result<Self, Self::Error> {
+    fn try_from(val: Response) -> Result<Self, Self::Error> {
         match val {
-            Value::String(val) => Ok(val),
-            Value::Bytes(val) => {
+            Response::String(val) => Ok(val),
+            Response::Bytes(val) => {
                 if let Ok(val) = ByteString::try_from(val) {
                     Ok(val)
                 } else {
-                    Err(Error::Decode("Cannot convert into a string", Value::Nil))
+                    Err(("Cannot convert into a string", Response::Nil))
                 }
             }
-            _ => Err(Error::Decode("Cannot convert into a string", val)),
+            _ => Err(("Cannot convert into a string", val)),
         }
     }
 }
 
-impl TryFrom<Value> for i64 {
-    type Error = Error;
+impl TryFrom<Response> for i64 {
+    type Error = (&'static str, Response);
 
-    fn try_from(val: Value) -> Result<Self, Self::Error> {
-        if let Value::Integer(i) = val {
+    fn try_from(val: Response) -> Result<Self, Self::Error> {
+        if let Response::Integer(i) = val {
             Ok(i)
         } else {
-            Err(Error::Decode("Cannot be converted into an i64", val))
+            Err(("Cannot be converted into an i64", val))
         }
     }
 }
 
-impl TryFrom<Value> for bool {
-    type Error = Error;
+impl TryFrom<Response> for bool {
+    type Error = (&'static str, Response);
 
-    fn try_from(val: Value) -> Result<bool, Self::Error> {
+    fn try_from(val: Response) -> Result<bool, Self::Error> {
         i64::try_from(val).and_then(|x| match x {
             0 => Ok(false),
             1 => Ok(true),
-            _ => Err(Error::Decode(
+            _ => Err((
                 "i64 value cannot be represented as bool",
-                Value::Integer(x),
+                Response::Integer(x),
             )),
         })
     }
 }
 
 // impl<T: TryFrom<Value>> TryFrom<Value> for Option<T> {
-//     type Error = Error;
+//     type Error = (&'static str, Response);
 //
 //     fn try_from(val: Value) -> Result<Option<T>, Self::Error> {
 //         match val {
@@ -199,53 +234,50 @@ impl TryFrom<Value> for bool {
 //     }
 // }
 
-impl<T> TryFrom<Value> for Vec<T>
+impl<T> TryFrom<Response> for Vec<T>
 where
-    T: TryFrom<Value, Error = Error>,
+    T: TryFrom<Response, Error = (&'static str, Response)>,
 {
-    type Error = Error;
+    type Error = (&'static str, Response);
 
-    fn try_from(val: Value) -> Result<Vec<T>, Self::Error> {
-        if let Value::Array(ary) = val {
+    fn try_from(val: Response) -> Result<Vec<T>, Self::Error> {
+        if let Response::Array(ary) = val {
             let mut ar = Vec::with_capacity(ary.len());
             for value in ary {
                 ar.push(T::try_from(value)?);
             }
             Ok(ar)
         } else {
-            Err(Error::Decode("Cannot be converted into a vector", val))
+            Err(("Cannot be converted into a vector", val))
         }
     }
 }
 
-impl TryFrom<Value> for () {
-    type Error = Error;
+impl TryFrom<Response> for () {
+    type Error = (&'static str, Response);
 
-    fn try_from(val: Value) -> Result<(), Self::Error> {
-        if let Value::String(string) = val {
+    fn try_from(val: Response) -> Result<(), Self::Error> {
+        if let Response::String(string) = val {
             match string.as_ref() {
                 "OK" => Ok(()),
-                _ => Err(Error::Decode(
-                    "Unexpected value within String",
-                    Value::String(string),
-                )),
+                _ => Err(("Unexpected value within String", Response::String(string))),
             }
         } else {
-            Err(Error::Decode("Unexpected value", val))
+            Err(("Unexpected value", val))
         }
     }
 }
 
-impl<A, B> TryFrom<Value> for (A, B)
+impl<A, B> TryFrom<Response> for (A, B)
 where
-    A: TryFrom<Value, Error = Error>,
-    B: TryFrom<Value, Error = Error>,
+    A: TryFrom<Response, Error = (&'static str, Response)>,
+    B: TryFrom<Response, Error = (&'static str, Response)>,
 {
-    type Error = Error;
+    type Error = (&'static str, Response);
 
-    fn try_from(val: Value) -> Result<(A, B), Self::Error> {
+    fn try_from(val: Response) -> Result<(A, B), Self::Error> {
         match val {
-            Value::Array(ary) => {
+            Response::Array(ary) => {
                 if ary.len() == 2 {
                     let mut ary_iter = ary.into_iter();
                     Ok((
@@ -253,28 +285,25 @@ where
                         B::try_from(ary_iter.next().expect("No value"))?,
                     ))
                 } else {
-                    Err(Error::Decode(
-                        "Array needs to be 2 elements",
-                        Value::Array(ary),
-                    ))
+                    Err(("Array needs to be 2 elements", Response::Array(ary)))
                 }
             }
-            _ => Err(Error::Decode("Unexpected value", val)),
+            _ => Err(("Unexpected value", val)),
         }
     }
 }
 
-impl<A, B, C> TryFrom<Value> for (A, B, C)
+impl<A, B, C> TryFrom<Response> for (A, B, C)
 where
-    A: TryFrom<Value, Error = Error>,
-    B: TryFrom<Value, Error = Error>,
-    C: TryFrom<Value, Error = Error>,
+    A: TryFrom<Response, Error = (&'static str, Response)>,
+    B: TryFrom<Response, Error = (&'static str, Response)>,
+    C: TryFrom<Response, Error = (&'static str, Response)>,
 {
-    type Error = Error;
+    type Error = (&'static str, Response);
 
-    fn try_from(val: Value) -> Result<(A, B, C), Self::Error> {
+    fn try_from(val: Response) -> Result<(A, B, C), Self::Error> {
         match val {
-            Value::Array(ary) => {
+            Response::Array(ary) => {
                 if ary.len() == 3 {
                     let mut ary_iter = ary.into_iter();
                     Ok((
@@ -283,37 +312,34 @@ where
                         C::try_from(ary_iter.next().expect("No value"))?,
                     ))
                 } else {
-                    Err(Error::Decode(
-                        "Array needs to be 3 elements",
-                        Value::Array(ary),
-                    ))
+                    Err(("Array needs to be 3 elements", Response::Array(ary)))
                 }
             }
-            _ => Err(Error::Decode("Unexpected value", val)),
+            _ => Err(("Unexpected value", val)),
         }
     }
 }
 
-impl<K, T, S> TryFrom<Value> for HashMap<K, T, S>
+impl<K, T, S> TryFrom<Response> for HashMap<K, T, S>
 where
-    K: TryFrom<Value, Error = Error> + Hash + Eq,
-    T: TryFrom<Value, Error = Error>,
+    K: TryFrom<Response, Error = (&'static str, Response)> + Hash + Eq,
+    T: TryFrom<Response, Error = (&'static str, Response)>,
     S: BuildHasher + Default,
 {
-    type Error = Error;
+    type Error = (&'static str, Response);
 
-    fn try_from(val: Value) -> Result<HashMap<K, T, S>, Self::Error> {
+    fn try_from(val: Response) -> Result<HashMap<K, T, S>, Self::Error> {
         match val {
-            Value::Array(ary) => {
+            Response::Array(ary) => {
                 let mut map = HashMap::with_capacity_and_hasher(ary.len(), S::default());
                 let mut items = ary.into_iter();
 
                 while let Some(k) = items.next() {
                     let key = K::try_from(k)?;
                     let value = T::try_from(items.next().ok_or_else(|| {
-                        Error::Decode(
+                        (
                             "Cannot convert an odd number of elements into a hashmap",
-                            Value::Nil,
+                            Response::Nil,
                         )
                     })?)?;
 
@@ -322,7 +348,7 @@ where
 
                 Ok(map)
             }
-            _ => Err(Error::Decode("Cannot be converted into a hashmap", val)),
+            _ => Err(("Cannot be converted into a hashmap", val)),
         }
     }
 }
@@ -331,10 +357,10 @@ macro_rules! impl_fromresp_integers {
     ($($int_ty:ident),* $(,)*) => {
         $(
             #[allow(clippy::cast_lossless)]
-            impl TryFrom<Value> for $int_ty {
-                type Error = Error;
+            impl TryFrom<Response> for $int_ty {
+                type Error = (&'static str, Response);
 
-                fn try_from(val: Value) -> Result<Self, Self::Error> {
+                fn try_from(val: Response) -> Result<Self, Self::Error> {
                     i64::try_from(val).and_then(|x| {
                         // $int_ty::max_value() as i64 > 0 should be optimized out. It tests if
                         // the target integer type needs an "upper bounds" check
@@ -342,12 +368,12 @@ macro_rules! impl_fromresp_integers {
                             || ($int_ty::max_value() as i64 > 0
                                 && x > ($int_ty::max_value() as i64))
                         {
-                            Err(Error::Decode(
+                            Err((
                                 concat!(
                                     "i64 value cannot be represented as {}",
                                     stringify!($int_ty),
                                 ),
-                                Value::Integer(x),
+                                Response::Integer(x),
                             ))
                         } else {
                             Ok(x as $int_ty)
@@ -361,105 +387,105 @@ macro_rules! impl_fromresp_integers {
 
 impl_fromresp_integers!(isize, usize, i32, u32, u64);
 
-impl From<ByteString> for Value {
-    fn from(val: ByteString) -> Value {
-        Value::Bytes(val.into_inner())
+impl From<ByteString> for Request {
+    fn from(val: ByteString) -> Request {
+        Request::Bytes(val.into_inner())
     }
 }
 
-impl From<String> for Value {
-    fn from(val: String) -> Value {
-        Value::Bytes(Bytes::from(val))
+impl From<String> for Request {
+    fn from(val: String) -> Request {
+        Request::Bytes(Bytes::from(val))
     }
 }
 
-impl<'a> From<&'a String> for Value {
-    fn from(val: &'a String) -> Value {
-        Value::Bytes(Bytes::copy_from_slice(val.as_ref()))
+impl<'a> From<&'a String> for Request {
+    fn from(val: &'a String) -> Request {
+        Request::Bytes(Bytes::copy_from_slice(val.as_ref()))
     }
 }
 
-impl<'a> From<&'a str> for Value {
-    fn from(val: &'a str) -> Value {
-        Value::Bytes(Bytes::copy_from_slice(val.as_bytes()))
+impl<'a> From<&'a str> for Request {
+    fn from(val: &'a str) -> Request {
+        Request::Bytes(Bytes::copy_from_slice(val.as_bytes()))
     }
 }
 
-impl<'a> From<&&'a str> for Value {
-    fn from(val: &&'a str) -> Value {
-        Value::Bytes(Bytes::copy_from_slice(val.as_bytes()))
+impl<'a> From<&&'a str> for Request {
+    fn from(val: &&'a str) -> Request {
+        Request::Bytes(Bytes::copy_from_slice(val.as_bytes()))
     }
 }
 
-impl From<Bytes> for Value {
-    fn from(val: Bytes) -> Value {
-        Value::Bytes(val)
+impl From<Bytes> for Request {
+    fn from(val: Bytes) -> Request {
+        Request::Bytes(val)
     }
 }
 
-impl<'a> From<&'a Bytes> for Value {
-    fn from(val: &'a Bytes) -> Value {
-        Value::Bytes(val.clone())
+impl<'a> From<&'a Bytes> for Request {
+    fn from(val: &'a Bytes) -> Request {
+        Request::Bytes(val.clone())
     }
 }
 
-impl<'a> From<&'a [u8]> for Value {
-    fn from(val: &'a [u8]) -> Value {
-        Value::Bytes(Bytes::copy_from_slice(val))
+impl<'a> From<&'a [u8]> for Request {
+    fn from(val: &'a [u8]) -> Request {
+        Request::Bytes(Bytes::copy_from_slice(val))
     }
 }
 
-impl From<Vec<u8>> for Value {
-    fn from(val: Vec<u8>) -> Value {
-        Value::Bytes(Bytes::from(val))
+impl From<Vec<u8>> for Request {
+    fn from(val: Vec<u8>) -> Request {
+        Request::Bytes(Bytes::from(val))
     }
 }
 
-impl From<i8> for Value {
-    fn from(val: i8) -> Value {
-        Value::Integer(val as i64)
+impl From<i8> for Request {
+    fn from(val: i8) -> Request {
+        Request::Integer(val as i64)
     }
 }
 
-impl From<i16> for Value {
-    fn from(val: i16) -> Value {
-        Value::Integer(val as i64)
+impl From<i16> for Request {
+    fn from(val: i16) -> Request {
+        Request::Integer(val as i64)
     }
 }
 
-impl From<i32> for Value {
-    fn from(val: i32) -> Value {
-        Value::Integer(val as i64)
+impl From<i32> for Request {
+    fn from(val: i32) -> Request {
+        Request::Integer(val as i64)
     }
 }
 
-impl From<i64> for Value {
-    fn from(val: i64) -> Value {
-        Value::Integer(val)
+impl From<i64> for Request {
+    fn from(val: i64) -> Request {
+        Request::Integer(val)
     }
 }
 
-impl From<u8> for Value {
-    fn from(val: u8) -> Value {
-        Value::Integer(val as i64)
+impl From<u8> for Request {
+    fn from(val: u8) -> Request {
+        Request::Integer(val as i64)
     }
 }
 
-impl From<u16> for Value {
-    fn from(val: u16) -> Value {
-        Value::Integer(val as i64)
+impl From<u16> for Request {
+    fn from(val: u16) -> Request {
+        Request::Integer(val as i64)
     }
 }
 
-impl From<u32> for Value {
-    fn from(val: u32) -> Value {
-        Value::Integer(val as i64)
+impl From<u32> for Request {
+    fn from(val: u32) -> Request {
+        Request::Integer(val as i64)
     }
 }
 
-impl From<usize> for Value {
-    fn from(val: usize) -> Value {
-        Value::Integer(val as i64)
+impl From<usize> for Request {
+    fn from(val: usize) -> Request {
+        Request::Integer(val as i64)
     }
 }
 
@@ -484,7 +510,7 @@ fn write_string(symb: u8, string: &str, buf: &mut BytesMut) {
     write_rn(buf);
 }
 
-type DecodeResult = Result<Option<(usize, Value)>, Error>;
+type DecodeResult = Result<Option<(usize, Response)>, Error>;
 
 fn decode(buf: &mut BytesMut, idx: usize) -> DecodeResult {
     match buf[idx] {
@@ -518,7 +544,7 @@ fn decode_raw_integer(buf: &mut BytesMut, idx: usize) -> Result<Option<(usize, i
 
 fn decode_bytes(buf: &mut BytesMut, idx: usize) -> DecodeResult {
     match decode_raw_integer(buf, idx)? {
-        Some((pos, -1)) => Ok(Some((pos, Value::Nil))),
+        Some((pos, -1)) => Ok(Some((pos, Response::Nil))),
         Some((pos, size)) if size >= 0 => {
             let size = size as usize;
             let remaining = buf.len() - pos;
@@ -528,7 +554,7 @@ fn decode_bytes(buf: &mut BytesMut, idx: usize) -> DecodeResult {
                 return Ok(None);
             }
             buf.advance(pos);
-            Ok(Some((2, Value::Bytes(buf.split_to(size).freeze()))))
+            Ok(Some((2, Response::Bytes(buf.split_to(size).freeze()))))
         }
         Some((_, size)) => Err(Error::Parse(format!("Invalid string size: {}", size))),
         None => Ok(None),
@@ -537,7 +563,7 @@ fn decode_bytes(buf: &mut BytesMut, idx: usize) -> DecodeResult {
 
 fn decode_array(buf: &mut BytesMut, idx: usize) -> DecodeResult {
     match decode_raw_integer(buf, idx)? {
-        Some((pos, -1)) => Ok(Some((pos, Value::Nil))),
+        Some((pos, -1)) => Ok(Some((pos, Response::Nil))),
         Some((pos, size)) if size >= 0 => {
             let size = size as usize;
             let mut pos = pos;
@@ -552,7 +578,7 @@ fn decode_array(buf: &mut BytesMut, idx: usize) -> DecodeResult {
                     Err(e) => return Err(e),
                 }
             }
-            Ok(Some((pos, Value::Array(values))))
+            Ok(Some((pos, Response::Array(values))))
         }
         Some((_, size)) => Err(Error::Parse(format!("Invalid array size: {}", size))),
         None => Ok(None),
@@ -561,7 +587,7 @@ fn decode_array(buf: &mut BytesMut, idx: usize) -> DecodeResult {
 
 fn decode_integer(buf: &mut BytesMut, idx: usize) -> DecodeResult {
     if let Some((pos, int)) = decode_raw_integer(buf, idx)? {
-        Ok(Some((pos, Value::Integer(int))))
+        Ok(Some((pos, Response::Integer(int))))
     } else {
         Ok(None)
     }
@@ -570,7 +596,7 @@ fn decode_integer(buf: &mut BytesMut, idx: usize) -> DecodeResult {
 /// A simple string is any series of bytes that ends with `\r\n`
 fn decode_string(buf: &mut BytesMut, idx: usize) -> DecodeResult {
     if let Some((pos, string)) = scan_string(buf, idx)? {
-        Ok(Some((pos, Value::String(string))))
+        Ok(Some((pos, Response::String(string))))
     } else {
         Ok(None)
     }
@@ -578,7 +604,7 @@ fn decode_string(buf: &mut BytesMut, idx: usize) -> DecodeResult {
 
 fn decode_error(buf: &mut BytesMut, idx: usize) -> DecodeResult {
     if let Some((pos, string)) = scan_string(buf, idx)? {
-        Ok(Some((pos, Value::Error(string))))
+        Ok(Some((pos, Response::Error(string))))
     } else {
         Ok(None)
     }
@@ -608,9 +634,9 @@ mod tests {
     use bytestring::ByteString;
     use ntex_codec::{Decoder, Encoder};
 
-    use crate::{array, Codec, Error, Value};
+    use crate::{array, Codec, Request, Response};
 
-    fn obj_to_bytes(obj: Value) -> Vec<u8> {
+    fn obj_to_bytes(obj: Request) -> Vec<u8> {
         let mut bytes = BytesMut::new();
         let mut codec = Codec;
         codec.encode(obj, &mut bytes).unwrap();
@@ -623,7 +649,7 @@ mod tests {
         let bytes = obj_to_bytes(resp_object);
         assert_eq!(b"*2\r\n$3\r\nSET\r\n$1\r\nx\r\n", bytes.as_slice());
 
-        let resp_object = array!["RPUSH", "wyz"].append(vec!["a", "b"]);
+        let resp_object = array!["RPUSH", "wyz"].extend(vec!["a", "b"]);
         let bytes = obj_to_bytes(resp_object);
         assert_eq!(
             b"*4\r\n$5\r\nRPUSH\r\n$3\r\nwyz\r\n$1\r\na\r\n$1\r\nb\r\n".as_ref(),
@@ -631,7 +657,7 @@ mod tests {
         );
 
         let vals = vec!["a", "b"];
-        let resp_object = array!["RPUSH", "xyz"].append(&vals);
+        let resp_object = array!["RPUSH", "xyz"].extend(&vals);
         let bytes = obj_to_bytes(resp_object);
         assert_eq!(
             &b"*4\r\n$5\r\nRPUSH\r\n$3\r\nxyz\r\n$1\r\na\r\n$1\r\nb\r\n"[..],
@@ -641,29 +667,34 @@ mod tests {
 
     #[test]
     fn test_bulk_string() {
-        let resp_object = Value::Bytes(Bytes::from_static(b"THISISATEST"));
+        let req_object = Request::Bytes(Bytes::from_static(b"THISISATEST"));
         let mut bytes = BytesMut::new();
         let mut codec = Codec;
-        codec.encode(resp_object.clone(), &mut bytes).unwrap();
+        codec.encode(req_object.clone(), &mut bytes).unwrap();
         assert_eq!(b"$11\r\nTHISISATEST\r\n".to_vec(), bytes.to_vec());
 
+        let resp_object = Response::Bytes(Bytes::from_static(b"THISISATEST"));
         let deserialized = codec.decode(&mut bytes).unwrap().unwrap();
         assert_eq!(deserialized, resp_object);
     }
 
     #[test]
     fn test_array() {
-        let resp_object = Value::Array(vec![b"TEST1".as_ref().into(), b"TEST2".as_ref().into()]);
+        let req_object = Request::Array(vec![b"TEST1".as_ref().into(), b"TEST2".as_ref().into()]);
         let mut bytes = BytesMut::new();
         let mut codec = Codec;
-        codec.encode(resp_object.clone(), &mut bytes).unwrap();
+        codec.encode(req_object.clone(), &mut bytes).unwrap();
         assert_eq!(
             b"*2\r\n$5\r\nTEST1\r\n$5\r\nTEST2\r\n".to_vec(),
             bytes.to_vec()
         );
 
+        let resp = Response::Array(vec![
+            Response::Bytes(Bytes::from_static(b"TEST1")),
+            Response::Bytes(Bytes::from_static(b"TEST2")),
+        ]);
         let deserialized = codec.decode(&mut bytes).unwrap().unwrap();
-        assert_eq!(deserialized, resp_object);
+        assert_eq!(deserialized, resp);
     }
 
     #[test]
@@ -673,26 +704,26 @@ mod tests {
 
         let mut codec = Codec;
         let deserialized = codec.decode(&mut bytes).unwrap().unwrap();
-        assert_eq!(deserialized, Value::Nil);
+        assert_eq!(deserialized, Response::Nil);
     }
 
     #[test]
     fn test_integer_overflow() {
-        let resp_object = Value::Integer(i64::max_value());
+        let resp_object = Response::Integer(i64::max_value());
         let res = i32::try_from(resp_object);
         assert!(res.is_err());
     }
 
     #[test]
     fn test_integer_underflow() {
-        let resp_object = Value::Integer(-2);
+        let resp_object = Response::Integer(-2);
         let res = u64::try_from(resp_object);
         assert!(res.is_err());
     }
 
     #[test]
     fn test_integer_convesion() {
-        let resp_object = Value::Integer(50);
+        let resp_object = Response::Integer(50);
         assert_eq!(u32::try_from(resp_object).unwrap(), 50);
     }
 
@@ -708,11 +739,11 @@ mod tests {
             ByteString::from("VALUE2").into(),
         );
 
-        let resp_object = Value::Array(vec![
-            "KEY1".into(),
-            "VALUE1".into(),
-            "KEY2".into(),
-            "VALUE2".into(),
+        let resp_object = Response::Array(vec![
+            Response::String(ByteString::from_static("KEY1")),
+            Response::String(ByteString::from_static("VALUE1")),
+            Response::String(ByteString::from_static("KEY2")),
+            Response::String(ByteString::from_static("VALUE2")),
         ]);
         assert_eq!(
             HashMap::<ByteString, ByteString>::try_from(resp_object).unwrap(),
@@ -722,17 +753,17 @@ mod tests {
 
     #[test]
     fn test_hashmap_conversion_fails_with_odd_length_array() {
-        let resp_object = Value::Array(vec![
-            "KEY1".into(),
-            "VALUE1".into(),
-            "KEY2".into(),
-            "VALUE2".into(),
-            "KEY3".into(),
+        let resp_object = Response::Array(vec![
+            Response::String(ByteString::from_static("KEY1")),
+            Response::String(ByteString::from_static("VALUE1")),
+            Response::String(ByteString::from_static("KEY2")),
+            Response::String(ByteString::from_static("VALUE2")),
+            Response::String(ByteString::from_static("KEY3")),
         ]);
         let res = HashMap::<ByteString, ByteString>::try_from(resp_object);
 
         match res {
-            Err(Error::Decode(_, _)) => {}
+            Err((_, _)) => {}
             _ => panic!("Should not be able to convert an odd number of elements to a hashmap"),
         }
     }
