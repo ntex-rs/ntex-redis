@@ -6,9 +6,11 @@ use super::{Request, Response};
 
 mod auth;
 mod get;
+mod set;
 
 pub use self::auth::Auth;
 pub use self::get::Get;
+pub use self::set::Set;
 
 pub trait Command {
     type Output;

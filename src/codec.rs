@@ -38,7 +38,13 @@ impl Encoder for Codec {
             Request::Bytes(bstr) => {
                 let len = bstr.len();
                 write_header(b'$', len as i64, buf, len + 2);
-                buf.extend(bstr);
+                buf.extend_from_slice(&bstr[..]);
+                write_rn(buf);
+            }
+            Request::BytesStatic(bstr) => {
+                let len = bstr.len();
+                write_header(b'$', len as i64, buf, len + 2);
+                buf.extend_from_slice(bstr);
                 write_rn(buf);
             }
             Request::String(ref string) => {
@@ -81,6 +87,10 @@ pub enum Request {
     /// vector of `u8`s to allow clients to interpret the bytes as appropriate.
     Bytes(Bytes),
 
+    /// A bulk string. In Redis terminology a string is a byte-array, so this is stored as a
+    /// vector of `u8`s to allow clients to interpret the bytes as appropriate.
+    BytesStatic(&'static [u8]),
+
     /// A valid utf-8 string
     String(ByteString),
 
@@ -90,6 +100,16 @@ pub enum Request {
 }
 
 impl Request {
+    /// Create request from static str
+    pub fn from_static(data: &'static str) -> Self {
+        Request::BytesStatic(data.as_ref())
+    }
+
+    /// Create request from static str
+    pub fn from_bstatic(data: &'static [u8]) -> Self {
+        Request::BytesStatic(data)
+    }
+
     #[allow(clippy::should_implement_trait)]
     /// Convenience function for building dynamic Redis commands with variable numbers of
     /// arguments, e.g. RPUSH
@@ -513,13 +533,17 @@ fn write_string(symb: u8, string: &str, buf: &mut BytesMut) {
 type DecodeResult = Result<Option<(usize, Response)>, Error>;
 
 fn decode(buf: &mut BytesMut, idx: usize) -> DecodeResult {
-    match buf[idx] {
-        b'$' => decode_bytes(buf, idx + 1),
-        b'*' => decode_array(buf, idx + 1),
-        b':' => decode_integer(buf, idx + 1),
-        b'+' => decode_string(buf, idx + 1),
-        b'-' => decode_error(buf, idx + 1),
-        _ => Err(Error::Parse(format!("Unexpected byte: {}", buf[idx]))),
+    if !buf.is_empty() {
+        match buf[idx] {
+            b'$' => decode_bytes(buf, idx + 1),
+            b'*' => decode_array(buf, idx + 1),
+            b':' => decode_integer(buf, idx + 1),
+            b'+' => decode_string(buf, idx + 1),
+            b'-' => decode_error(buf, idx + 1),
+            _ => Err(Error::Parse(format!("Unexpected byte: {}", buf[idx]))),
+        }
+    } else {
+        Ok(None)
     }
 }
 

@@ -1,5 +1,3 @@
-use bytestring::ByteString;
-
 use super::{Command, CommandError, Request, Response};
 
 /// Create AUTH redis command
@@ -8,7 +6,7 @@ where
     Request: From<T>,
 {
     AuthCommand(Request::Array(vec![
-        Request::String(ByteString::from_static("AUTH")),
+        Request::from_static("AUTH"),
         password.into(),
     ]))
 }

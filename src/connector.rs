@@ -2,7 +2,7 @@ use bytestring::ByteString;
 use futures::Future;
 use ntex::channel::mpsc;
 use ntex::codec::{AsyncRead, AsyncWrite, Framed};
-use ntex::connect::{Address, Connect, Connector};
+use ntex::connect::{self, Address, Connect, Connector};
 use ntex::service::Service;
 
 #[cfg(feature = "openssl")]
@@ -42,7 +42,7 @@ where
 impl<A, T> RedisConnector<A, T>
 where
     A: Address + Clone,
-    T: Service<Request = Connect<A>, Error = ConnectError>,
+    T: Service<Request = Connect<A>, Error = connect::ConnectError>,
     T::Response: AsyncRead + AsyncWrite + Unpin + 'static,
 {
     /// Add redis auth password
@@ -58,7 +58,7 @@ where
     /// Use custom connector
     pub fn connector<U>(self, connector: U) -> RedisConnector<A, U>
     where
-        U: Service<Request = Connect<A>, Error = ConnectError>,
+        U: Service<Request = Connect<A>, Error = connect::ConnectError>,
         U::Response: AsyncRead + AsyncWrite + Unpin + 'static,
     {
         RedisConnector {

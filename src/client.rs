@@ -1,3 +1,4 @@
+use std::fmt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -55,6 +56,14 @@ impl Service for Client {
         let (tx, rx) = self.pool.channel();
         let _ = self.transport.send((req, tx));
         CommandResult { rx }
+    }
+}
+
+impl fmt::Debug for Client {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Client")
+            .field("connected", &!self.transport.is_closed())
+            .finish()
     }
 }
 

@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use bytestring::ByteString;
 
 use super::{Command, CommandError, Request, Response};
 
@@ -9,7 +8,7 @@ where
     Request: From<T>,
 {
     GetCommand(Request::Array(vec![
-        Request::String(ByteString::from_static("GET")),
+        Request::from_static("GET"),
         key.into(),
     ]))
 }
