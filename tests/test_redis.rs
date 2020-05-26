@@ -1,7 +1,7 @@
 use ntex_redis::{cmd, RedisConnector};
 
 #[ntex::test]
-async fn teste_auth() {
+async fn test_auth() {
     let result = RedisConnector::new("127.0.0.1:6379")
         .password("test")
         .connect()
@@ -10,7 +10,7 @@ async fn teste_auth() {
 }
 
 #[ntex::test]
-async fn teste_get_set() {
+async fn test_get_set() {
     env_logger::init();
 
     let redis = RedisConnector::new("127.0.0.1:6379")

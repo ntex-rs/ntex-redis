@@ -19,3 +19,9 @@ pub trait Command {
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError>;
 }
+
+pub mod dev {
+    pub use super::auth::AuthCommand;
+    pub use super::get::GetCommand;
+    pub use super::set::SetCommand;
+}
