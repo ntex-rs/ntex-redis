@@ -7,9 +7,11 @@ use ntex::channel::{mpsc, pool};
 use ntex::service::Service;
 
 use super::cmd::Command;
+use super::codec::{Request, Response};
 use super::errors::{CommandError, Error};
-use super::{Request, Response};
 
+#[derive(Clone)]
+/// Shared redis client
 pub struct Client {
     pool: pool::Pool<Result<Response, Error>>,
     transport: mpsc::Sender<(Request, pool::Sender<Result<Response, Error>>)>,

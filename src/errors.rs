@@ -1,10 +1,14 @@
+//! Redis protocol related errors
 use std::io;
 
 use bytestring::ByteString;
 use derive_more::{Display, From};
 use ntex::connect;
 
+use super::codec::Response;
+
 #[derive(Debug, Display)]
+/// Redis protocol errors
 pub enum Error {
     /// A RESP parsing error occurred
     #[display(fmt = "Redis server response error: {}", _0)]
@@ -38,22 +42,27 @@ impl From<io::Error> for Error {
 }
 
 #[derive(Debug, Display, From)]
+/// Redis connectivity errors
 pub enum ConnectError {
+    /// Auth command failed
     Unauthorized,
+    /// Command execution error
     Command(CommandError),
+    /// Io connectivity error
     Connect(connect::ConnectError),
 }
 
 impl std::error::Error for ConnectError {}
 
-#[derive(Debug, Display)]
+#[derive(Debug, Display, From)]
+/// Redis command execution errors
 pub enum CommandError {
     /// A redis server error response
     Error(ByteString),
 
     /// A command response parse error
     #[display(fmt = "Command output error: {}", _0)]
-    Output(&'static str, crate::Response),
+    Output(&'static str, Response),
 
     /// Redis protocol level errors
     Protocol(Error),

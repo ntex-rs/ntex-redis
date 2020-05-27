@@ -1,14 +1,4 @@
-/*
- * Copyright 2017-2019 Ben Ashford
- *
- * Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
- * http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
- * <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
- * option. This file may not be copied, modified, or distributed
- * except according to those terms.
- */
 //! Redis protocol codec
-
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::hash::{BuildHasher, Hash};
@@ -35,10 +25,10 @@ impl Encoder for Codec {
                     self.encode(v, buf)?;
                 }
             }
-            Request::Bytes(bstr) => {
-                let len = bstr.len();
+            Request::BulkString(bstr) => {
+                let len = bstr.0.len();
                 write_header(b'$', len as i64, buf, len + 2);
-                buf.extend_from_slice(&bstr[..]);
+                buf.extend_from_slice(&bstr.0[..]);
                 write_rn(buf);
             }
             Request::BytesStatic(bstr) => {
@@ -74,6 +64,85 @@ impl Decoder for Codec {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+/// A bulk string.
+///
+/// In Redis terminology a string is a byte-array, so this is stored as a
+/// vector of `u8`s to allow clients to interpret the bytes as appropriate.
+pub struct BulkString(Bytes);
+
+impl BulkString {
+    /// Create request from static str
+    pub fn from_static(data: &'static str) -> Self {
+        BulkString(Bytes::from_static(data.as_ref()))
+    }
+
+    /// Create request from static str
+    pub fn from_bstatic(data: &'static [u8]) -> Self {
+        BulkString(Bytes::from_static(data))
+    }
+}
+
+impl From<ByteString> for BulkString {
+    fn from(val: ByteString) -> BulkString {
+        BulkString(val.into_inner())
+    }
+}
+
+impl From<String> for BulkString {
+    fn from(val: String) -> BulkString {
+        BulkString(Bytes::from(val))
+    }
+}
+
+impl<'a> From<&'a String> for BulkString {
+    fn from(val: &'a String) -> BulkString {
+        BulkString(Bytes::copy_from_slice(val.as_ref()))
+    }
+}
+
+impl<'a> From<&'a str> for BulkString {
+    fn from(val: &'a str) -> BulkString {
+        BulkString(Bytes::copy_from_slice(val.as_bytes()))
+    }
+}
+
+impl<'a> From<&&'a str> for BulkString {
+    fn from(val: &&'a str) -> BulkString {
+        BulkString(Bytes::copy_from_slice(val.as_bytes()))
+    }
+}
+
+impl From<Bytes> for BulkString {
+    fn from(val: Bytes) -> BulkString {
+        BulkString(val)
+    }
+}
+
+impl From<BytesMut> for BulkString {
+    fn from(val: BytesMut) -> BulkString {
+        BulkString(val.freeze())
+    }
+}
+
+impl<'a> From<&'a Bytes> for BulkString {
+    fn from(val: &'a Bytes) -> BulkString {
+        BulkString(val.clone())
+    }
+}
+
+impl<'a> From<&'a [u8]> for BulkString {
+    fn from(val: &'a [u8]) -> BulkString {
+        BulkString(Bytes::copy_from_slice(val))
+    }
+}
+
+impl From<Vec<u8>> for BulkString {
+    fn from(val: Vec<u8>) -> BulkString {
+        BulkString(Bytes::from(val))
+    }
+}
+
 /// A single RESP value, this owns the data that is to-be written to Redis.
 ///
 /// It is cloneable to allow multiple copies to be delivered in certain circumstances, e.g. multiple
@@ -85,7 +154,7 @@ pub enum Request {
 
     /// A bulk string. In Redis terminology a string is a byte-array, so this is stored as a
     /// vector of `u8`s to allow clients to interpret the bytes as appropriate.
-    Bytes(Bytes),
+    BulkString(BulkString),
 
     /// A bulk string. In Redis terminology a string is a byte-array, so this is stored as a
     /// vector of `u8`s to allow clients to interpret the bytes as appropriate.
@@ -150,10 +219,64 @@ impl Request {
     }
 }
 
-/// A single RESP value, this owns the data that is read/to-be written to Redis.
-///
-/// It is cloneable to allow multiple copies to be delivered in certain circumstances, e.g. multiple
-/// subscribers to the same topic.
+impl<T> From<T> for Request
+where
+    BulkString: From<T>,
+{
+    fn from(val: T) -> Request {
+        Request::BulkString(val.into())
+    }
+}
+
+impl From<i8> for Request {
+    fn from(val: i8) -> Request {
+        Request::Integer(val as i64)
+    }
+}
+
+impl From<i16> for Request {
+    fn from(val: i16) -> Request {
+        Request::Integer(val as i64)
+    }
+}
+
+impl From<i32> for Request {
+    fn from(val: i32) -> Request {
+        Request::Integer(val as i64)
+    }
+}
+
+impl From<i64> for Request {
+    fn from(val: i64) -> Request {
+        Request::Integer(val)
+    }
+}
+
+impl From<u8> for Request {
+    fn from(val: u8) -> Request {
+        Request::Integer(val as i64)
+    }
+}
+
+impl From<u16> for Request {
+    fn from(val: u16) -> Request {
+        Request::Integer(val as i64)
+    }
+}
+
+impl From<u32> for Request {
+    fn from(val: u32) -> Request {
+        Request::Integer(val as i64)
+    }
+}
+
+impl From<usize> for Request {
+    fn from(val: usize) -> Request {
+        Request::Integer(val as i64)
+    }
+}
+
+/// A single RESP value, this owns the data that is read from Redis.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Response {
     Nil,
@@ -242,17 +365,6 @@ impl TryFrom<Response> for bool {
         })
     }
 }
-
-// impl<T: TryFrom<Value>> TryFrom<Value> for Option<T> {
-//     type Error = (&'static str, Response);
-//
-//     fn try_from(val: Value) -> Result<Option<T>, Self::Error> {
-//         match val {
-//             Value::Nil => Ok(None),
-//             x => Ok(Some(T::try_from(x)?)),
-//         }
-//     }
-// }
 
 impl<T> TryFrom<Response> for Vec<T>
 where
@@ -373,7 +485,7 @@ where
     }
 }
 
-macro_rules! impl_fromresp_integers {
+macro_rules! impl_tryfrom_integers {
     ($($int_ty:ident),* $(,)*) => {
         $(
             #[allow(clippy::cast_lossless)]
@@ -405,109 +517,7 @@ macro_rules! impl_fromresp_integers {
     };
 }
 
-impl_fromresp_integers!(isize, usize, i32, u32, u64);
-
-impl From<ByteString> for Request {
-    fn from(val: ByteString) -> Request {
-        Request::Bytes(val.into_inner())
-    }
-}
-
-impl From<String> for Request {
-    fn from(val: String) -> Request {
-        Request::Bytes(Bytes::from(val))
-    }
-}
-
-impl<'a> From<&'a String> for Request {
-    fn from(val: &'a String) -> Request {
-        Request::Bytes(Bytes::copy_from_slice(val.as_ref()))
-    }
-}
-
-impl<'a> From<&'a str> for Request {
-    fn from(val: &'a str) -> Request {
-        Request::Bytes(Bytes::copy_from_slice(val.as_bytes()))
-    }
-}
-
-impl<'a> From<&&'a str> for Request {
-    fn from(val: &&'a str) -> Request {
-        Request::Bytes(Bytes::copy_from_slice(val.as_bytes()))
-    }
-}
-
-impl From<Bytes> for Request {
-    fn from(val: Bytes) -> Request {
-        Request::Bytes(val)
-    }
-}
-
-impl<'a> From<&'a Bytes> for Request {
-    fn from(val: &'a Bytes) -> Request {
-        Request::Bytes(val.clone())
-    }
-}
-
-impl<'a> From<&'a [u8]> for Request {
-    fn from(val: &'a [u8]) -> Request {
-        Request::Bytes(Bytes::copy_from_slice(val))
-    }
-}
-
-impl From<Vec<u8>> for Request {
-    fn from(val: Vec<u8>) -> Request {
-        Request::Bytes(Bytes::from(val))
-    }
-}
-
-impl From<i8> for Request {
-    fn from(val: i8) -> Request {
-        Request::Integer(val as i64)
-    }
-}
-
-impl From<i16> for Request {
-    fn from(val: i16) -> Request {
-        Request::Integer(val as i64)
-    }
-}
-
-impl From<i32> for Request {
-    fn from(val: i32) -> Request {
-        Request::Integer(val as i64)
-    }
-}
-
-impl From<i64> for Request {
-    fn from(val: i64) -> Request {
-        Request::Integer(val)
-    }
-}
-
-impl From<u8> for Request {
-    fn from(val: u8) -> Request {
-        Request::Integer(val as i64)
-    }
-}
-
-impl From<u16> for Request {
-    fn from(val: u16) -> Request {
-        Request::Integer(val as i64)
-    }
-}
-
-impl From<u32> for Request {
-    fn from(val: u32) -> Request {
-        Request::Integer(val as i64)
-    }
-}
-
-impl From<usize> for Request {
-    fn from(val: usize) -> Request {
-        Request::Integer(val as i64)
-    }
-}
+impl_tryfrom_integers!(isize, usize, i32, u32, u64);
 
 fn write_rn(buf: &mut BytesMut) {
     buf.extend_from_slice(b"\r\n");
@@ -547,16 +557,15 @@ fn decode(buf: &mut BytesMut, idx: usize) -> DecodeResult {
     }
 }
 
-fn decode_raw_integer(buf: &mut BytesMut, idx: usize) -> Result<Option<(usize, i64)>, Error> {
-    // Many RESP types have their length (which is either bytes or "number of elements", depending on context)
-    // encoded as a string, terminated by "\r\n", this looks for them.
+fn decode_length(buf: &mut BytesMut, idx: usize) -> Result<Option<(usize, i64)>, Error> {
+    // length is encoded as a string, terminated by "\r\n"
     let (pos, int_str) = if let Some(pos) = buf[idx..].windows(2).position(|w| w == b"\r\n") {
         (idx + pos + 2, &buf[idx..idx + pos])
     } else {
         return Ok(None);
     };
 
-    // Redis integers are transmitted as strings, so we first convert the raw bytes into a string...
+    // int encoded as string
     match btoi::btoi(int_str) {
         Ok(int) => Ok(Some((pos, int))),
         Err(_) => Err(Error::Parse(format!(
@@ -567,7 +576,7 @@ fn decode_raw_integer(buf: &mut BytesMut, idx: usize) -> Result<Option<(usize, i
 }
 
 fn decode_bytes(buf: &mut BytesMut, idx: usize) -> DecodeResult {
-    match decode_raw_integer(buf, idx)? {
+    match decode_length(buf, idx)? {
         Some((pos, -1)) => Ok(Some((pos, Response::Nil))),
         Some((pos, size)) if size >= 0 => {
             let size = size as usize;
@@ -586,7 +595,7 @@ fn decode_bytes(buf: &mut BytesMut, idx: usize) -> DecodeResult {
 }
 
 fn decode_array(buf: &mut BytesMut, idx: usize) -> DecodeResult {
-    match decode_raw_integer(buf, idx)? {
+    match decode_length(buf, idx)? {
         Some((pos, -1)) => Ok(Some((pos, Response::Nil))),
         Some((pos, size)) if size >= 0 => {
             let size = size as usize;
@@ -610,7 +619,7 @@ fn decode_array(buf: &mut BytesMut, idx: usize) -> DecodeResult {
 }
 
 fn decode_integer(buf: &mut BytesMut, idx: usize) -> DecodeResult {
-    if let Some((pos, int)) = decode_raw_integer(buf, idx)? {
+    if let Some((pos, int)) = decode_length(buf, idx)? {
         Ok(Some((pos, Response::Integer(int))))
     } else {
         Ok(None)
@@ -658,40 +667,40 @@ mod tests {
     use bytestring::ByteString;
     use ntex_codec::{Decoder, Encoder};
 
-    use crate::{array, Codec, Request, Response};
+    use super::*;
+    use crate::array;
 
-    fn obj_to_bytes(obj: Request) -> Vec<u8> {
+    fn obj_to_bytes(obj: Request) -> Bytes {
         let mut bytes = BytesMut::new();
-        let mut codec = Codec;
-        codec.encode(obj, &mut bytes).unwrap();
-        bytes.to_vec()
+        Codec.encode(obj, &mut bytes).unwrap();
+        bytes.freeze()
     }
 
     #[test]
     fn test_array_macro() {
         let resp_object = array!["SET", "x"];
         let bytes = obj_to_bytes(resp_object);
-        assert_eq!(b"*2\r\n$3\r\nSET\r\n$1\r\nx\r\n", bytes.as_slice());
+        assert_eq!(bytes, b"*2\r\n$3\r\nSET\r\n$1\r\nx\r\n".as_ref());
 
         let resp_object = array!["RPUSH", "wyz"].extend(vec!["a", "b"]);
         let bytes = obj_to_bytes(resp_object);
         assert_eq!(
+            bytes,
             b"*4\r\n$5\r\nRPUSH\r\n$3\r\nwyz\r\n$1\r\na\r\n$1\r\nb\r\n".as_ref(),
-            bytes.as_slice()
         );
 
         let vals = vec!["a", "b"];
         let resp_object = array!["RPUSH", "xyz"].extend(&vals);
         let bytes = obj_to_bytes(resp_object);
         assert_eq!(
+            bytes,
             &b"*4\r\n$5\r\nRPUSH\r\n$3\r\nxyz\r\n$1\r\na\r\n$1\r\nb\r\n"[..],
-            bytes.as_slice()
         );
     }
 
     #[test]
     fn test_bulk_string() {
-        let req_object = Request::Bytes(Bytes::from_static(b"THISISATEST"));
+        let req_object = Request::BulkString(Bytes::from_static(b"THISISATEST").into());
         let mut bytes = BytesMut::new();
         let mut codec = Codec;
         codec.encode(req_object.clone(), &mut bytes).unwrap();

@@ -6,7 +6,8 @@ use futures::{Future, Stream};
 use ntex::channel::{mpsc, pool};
 use ntex::codec::{AsyncRead, AsyncWrite, Framed};
 
-use super::{codec::Codec, errors::Error, Request, Response};
+use super::codec::{Codec, Request, Response};
+use super::errors::Error;
 
 type Rx = mpsc::Receiver<(Request, pool::Sender<Result<Response, Error>>)>;
 

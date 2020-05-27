@@ -13,9 +13,10 @@ use ntex::connect::rustls::{ClientConfig, RustlsConnector};
 #[cfg(feature = "rustls")]
 use std::sync::Arc;
 
+use super::codec::Codec;
 use super::errors::ConnectError;
 use super::transport::Transport;
-use super::{cmd, Client, Codec};
+use super::{cmd, Client, SimpleClient};
 
 /// Redis connector
 pub struct RedisConnector<A, T> {
@@ -100,6 +101,30 @@ where
             ntex::rt::spawn(Transport::new(rx, Framed::new(io, Codec)));
 
             let client = Client::new(tx);
+
+            if passwords.is_empty() {
+                Ok(client)
+            } else {
+                for password in passwords {
+                    if client.exec(cmd::Auth(password)).await? {
+                        return Ok(client);
+                    }
+                }
+                Err(ConnectError::Unauthorized)
+            }
+        }
+    }
+
+    /// Connect to redis server and create simple client
+    pub fn connect_simple(
+        &self,
+    ) -> impl Future<Output = Result<SimpleClient<T::Response>, ConnectError>> {
+        let fut = self.connector.call(Connect::new(self.address.clone()));
+        let passwords = self.passwords.clone();
+
+        async move {
+            let io = fut.await?;
+            let mut client = SimpleClient::new(Framed::new(io, Codec));
 
             if passwords.is_empty() {
                 Ok(client)

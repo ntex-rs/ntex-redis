@@ -1,13 +1,14 @@
-use super::{Command, CommandError, Request, Response};
+use super::{Command, CommandError};
+use crate::codec::{BulkString, Request, Response};
 
 /// Create AUTH redis command
 pub fn Auth<T>(password: T) -> AuthCommand
 where
-    Request: From<T>,
+    BulkString: From<T>,
 {
     AuthCommand(Request::Array(vec![
         Request::from_static("AUTH"),
-        password.into(),
+        Request::BulkString(password.into()),
     ]))
 }
 

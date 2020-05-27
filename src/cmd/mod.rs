@@ -1,16 +1,14 @@
 //! Redis commands
 #![allow(non_snake_case)]
 
+use super::codec::{Request, Response};
 use super::errors::CommandError;
-use super::{Request, Response};
 
 mod auth;
-mod get;
-mod set;
+mod strings;
 
 pub use self::auth::Auth;
-pub use self::get::Get;
-pub use self::set::Set;
+pub use self::strings::{Get, Set};
 
 pub trait Command {
     type Output;
@@ -22,6 +20,5 @@ pub trait Command {
 
 pub mod dev {
     pub use super::auth::AuthCommand;
-    pub use super::get::GetCommand;
-    pub use super::set::SetCommand;
+    pub use super::strings::{GetCommand, SetCommand};
 }
