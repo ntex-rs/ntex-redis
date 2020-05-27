@@ -1,6 +1,4 @@
-use bytes::Bytes;
-
-use super::{Command, CommandError};
+use super::{utils, Command, CommandError};
 use crate::codec::{BulkString, Request, Response};
 
 /// LINDEX redis command
@@ -29,33 +27,15 @@ use crate::codec::{BulkString, Request, Response};
 ///     Ok(())
 /// }
 /// ```
-pub fn LIndex<T>(key: T, index: i64) -> LIndexCommand
+pub fn LIndex<T>(key: T, index: i64) -> utils::BulkOutputCommand
 where
     BulkString: From<T>,
 {
-    LIndexCommand(Request::Array(vec![
+    utils::BulkOutputCommand(Request::Array(vec![
         Request::from_static("LINDEX"),
         Request::BulkString(key.into()),
         Request::BulkInteger(index),
     ]))
-}
-
-pub struct LIndexCommand(Request);
-
-impl Command for LIndexCommand {
-    type Output = Option<Bytes>;
-
-    fn to_request(self) -> Request {
-        self.0
-    }
-
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::Nil => Ok(None),
-            Response::Bytes(val) => Ok(Some(val)),
-            _ => Err(CommandError::Output("Cannot parse response", val)),
-        }
-    }
 }
 
 /// LPOP redis command
@@ -84,11 +64,11 @@ impl Command for LIndexCommand {
 ///     Ok(())
 /// }
 /// ```
-pub fn LPop<T>(key: T) -> LPopCommand
+pub fn LPop<T>(key: T) -> utils::BulkOutputCommand
 where
     BulkString: From<T>,
 {
-    LPopCommand(Request::Array(vec![
+    utils::BulkOutputCommand(Request::Array(vec![
         Request::from_static("LPOP"),
         Request::BulkString(key.into()),
     ]))
@@ -120,32 +100,14 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub fn RPop<T>(key: T) -> LPopCommand
+pub fn RPop<T>(key: T) -> utils::BulkOutputCommand
 where
     BulkString: From<T>,
 {
-    LPopCommand(Request::Array(vec![
+    utils::BulkOutputCommand(Request::Array(vec![
         Request::from_static("RPOP"),
         Request::BulkString(key.into()),
     ]))
-}
-
-pub struct LPopCommand(Request);
-
-impl Command for LPopCommand {
-    type Output = Option<Bytes>;
-
-    fn to_request(self) -> Request {
-        self.0
-    }
-
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::Nil => Ok(None),
-            Response::Bytes(val) => Ok(Some(val)),
-            _ => Err(CommandError::Output("Cannot parse response", val)),
-        }
-    }
 }
 
 /// LPUSH redis command

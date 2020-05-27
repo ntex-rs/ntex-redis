@@ -5,11 +5,14 @@ use super::codec::{Request, Response};
 use super::errors::CommandError;
 
 mod auth;
+mod hashes;
 mod keys;
 mod lists;
 mod strings;
+mod utils;
 
 pub use self::auth::Auth;
+pub use self::hashes::{HDel, HGet, HLen, HSet};
 pub use self::keys::{Del, Exists};
 pub use self::lists::{LIndex, LPop, LPush, RPop, RPush};
 pub use self::strings::{Get, Set};
@@ -29,7 +32,9 @@ pub trait Command {
 pub mod commands {
     //! Command implementations
     pub use super::auth::AuthCommand;
+    pub use super::hashes::{HDelCommand, HSetCommand};
     pub use super::keys::KeysCommand;
-    pub use super::lists::{LIndexCommand, LPopCommand, LPushCommand};
-    pub use super::strings::{GetCommand, SetCommand};
+    pub use super::lists::LPushCommand;
+    pub use super::strings::SetCommand;
+    pub use super::utils::{BulkOutputCommand, IntOutputCommand};
 }

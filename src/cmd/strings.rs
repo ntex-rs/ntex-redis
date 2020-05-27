@@ -1,60 +1,114 @@
-use bytes::Bytes;
-
-use super::{Command, CommandError};
+use super::{utils, Command, CommandError};
 use crate::codec::{BulkString, Request, Response};
 
 /// Create GET redis command
-pub fn Get<T>(key: T) -> GetCommand
+pub fn Get<T>(key: T) -> utils::BulkOutputCommand
 where
     BulkString: From<T>,
 {
-    GetCommand(Request::Array(vec![
+    utils::BulkOutputCommand(Request::Array(vec![
         Request::from_static("GET"),
         Request::BulkString(key.into()),
     ]))
 }
 
-pub struct GetCommand(Request);
-
-impl Command for GetCommand {
-    type Output = Option<Bytes>;
-
-    fn to_request(self) -> Request {
-        self.0
-    }
-
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::Nil => Ok(None),
-            Response::Bytes(val) => Ok(Some(val)),
-            Response::String(val) => Ok(Some(val.into_inner())),
-            _ => Err(CommandError::Output("Cannot parse response", val)),
-        }
-    }
-}
-
 /// Create SET redis command
 ///
-/// Command returns true if value is set
+/// Set key to hold the string value. Command returns true if value is set
 /// otherwise it returns false
 pub fn Set<T, V>(key: T, value: V) -> SetCommand
 where
     BulkString: From<T> + From<V>,
 {
-    SetCommand(Request::Array(vec![
-        Request::from_bstatic(b"SET"),
-        Request::BulkString(key.into()),
-        Request::BulkString(value.into()),
-    ]))
+    SetCommand {
+        req: vec![
+            Request::from_bstatic(b"SET"),
+            Request::BulkString(key.into()),
+            Request::BulkString(value.into()),
+        ],
+        expire: Expire::None,
+        keepttl: false,
+        exists: None,
+    }
 }
 
-pub struct SetCommand(Request);
+enum Expire {
+    None,
+    Ex(Request),
+    Px(Request),
+}
+
+pub struct SetCommand {
+    req: Vec<Request>,
+    expire: Expire,
+    keepttl: bool,
+    exists: Option<bool>,
+}
+
+impl SetCommand {
+    /// Set the specified expire time, in seconds.
+    pub fn expire_secs(mut self, secs: i64) -> Self {
+        self.expire = Expire::Ex(Request::BulkInteger(secs));
+        self
+    }
+
+    /// Set the specified expire time, in milliseconds.
+    pub fn expire_millis(mut self, secs: i64) -> Self {
+        self.expire = Expire::Px(Request::BulkInteger(secs));
+        self
+    }
+
+    /// Only set the key if it already exist.
+    pub fn if_exists(mut self) -> Self {
+        self.exists = Some(true);
+        self
+    }
+
+    /// Only set the key if it does not already exist.
+    pub fn if_not_exists(mut self) -> Self {
+        self.exists = Some(false);
+        self
+    }
+
+    /// Retain the time to live associated with the key.
+    pub fn keepttl(mut self) -> Self {
+        self.keepttl = true;
+        self
+    }
+}
 
 impl Command for SetCommand {
     type Output = bool;
 
-    fn to_request(self) -> Request {
-        self.0
+    fn to_request(mut self) -> Request {
+        // EX|PX
+        match self.expire {
+            Expire::None => (),
+            Expire::Ex(r) => {
+                self.req.push(Request::from_bstatic(b"EX"));
+                self.req.push(r);
+            }
+            Expire::Px(r) => {
+                self.req.push(Request::from_bstatic(b"PX"));
+                self.req.push(r);
+            }
+        }
+
+        // NX|XX
+        if let Some(exists) = self.exists {
+            self.req.push(if exists {
+                Request::from_bstatic(b"XX")
+            } else {
+                Request::from_bstatic(b"NX")
+            });
+        }
+
+        // KEEPTTL
+        if self.keepttl {
+            self.req.push(Request::from_bstatic(b"KEEPTTL"))
+        }
+
+        Request::Array(self.req)
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
