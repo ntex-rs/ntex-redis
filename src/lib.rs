@@ -73,3 +73,12 @@ macro_rules! array {
         $crate::codec::Request::Array(vec![$($e.into(),)*])
     }}
 }
+
+#[cfg(test)]
+pub fn gen_random_key() -> String {
+    use rand::distributions::Alphanumeric;
+    use rand::{thread_rng, Rng};
+
+    let key: String = thread_rng().sample_iter(&Alphanumeric).take(12).collect();
+    key
+}

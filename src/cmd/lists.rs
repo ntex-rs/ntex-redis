@@ -9,11 +9,9 @@ use crate::codec::{BulkString, Request, Response};
 ///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
-/// # use rand::{thread_rng, Rng};
-/// # use rand::distributions::Alphanumeric;
+/// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
 /// # fn gen_random_key() -> String {
-/// # let key: String = thread_rng().sample_iter(&Alphanumeric).take(12).collect();
-/// # key
+/// #    thread_rng().sample_iter(&Alphanumeric).take(12).collect::<String>()
 /// # }
 ///
 /// #[ntex::main]
@@ -63,6 +61,29 @@ impl Command for LIndexCommand {
 /// LPOP redis command
 ///
 /// Removes and returns the first element of the list stored at key.
+///
+/// ```rust
+/// use ntex_redis::{cmd, RedisConnector};
+/// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
+/// # fn gen_random_key() -> String {
+/// #    thread_rng().sample_iter(&Alphanumeric).take(12).collect::<String>()
+/// # }
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
+///     let key = gen_random_key();
+///
+///     // create list with one value
+///     redis.exec(cmd::LPush(&key, "value")).await?;
+///
+///     // pop first elements from the list
+///     let value = redis.exec(cmd::LPop(&key)).await?;
+///
+///     assert_eq!(value.unwrap(), "value");
+///     Ok(())
+/// }
+/// ```
 pub fn LPop<T>(key: T) -> LPopCommand
 where
     BulkString: From<T>,
@@ -76,6 +97,29 @@ where
 /// RPOP redis command
 ///
 /// Removes and returns the last element of the list stored at key.
+///
+/// ```rust
+/// use ntex_redis::{cmd, RedisConnector};
+/// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
+/// # fn gen_random_key() -> String {
+/// #    thread_rng().sample_iter(&Alphanumeric).take(12).collect::<String>()
+/// # }
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
+///     let key = gen_random_key();
+///
+///     // create list with one value
+///     redis.exec(cmd::LPush(&key, "value")).await?;
+///
+///     // pop last elements from the list
+///     let value = redis.exec(cmd::RPop(&key)).await?;
+///
+///     assert_eq!(value.unwrap(), "value");
+///     Ok(())
+/// }
+/// ```
 pub fn RPop<T>(key: T) -> LPopCommand
 where
     BulkString: From<T>,
@@ -107,6 +151,53 @@ impl Command for LPopCommand {
 /// LPUSH redis command
 ///
 /// Insert all the specified values at the head of the list stored at key.
+///
+/// ```rust
+/// use ntex_redis::{cmd, RedisConnector};
+/// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
+/// # fn gen_random_key() -> String {
+/// #    thread_rng().sample_iter(&Alphanumeric).take(12).collect::<String>()
+/// # }
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
+///     let key = gen_random_key();
+///
+///     // create list with one value
+///     redis.exec(
+///         cmd::LPush(&key, "value1")
+///            .extend(vec!["value2", "value3", "value4"])
+///     ).await?;
+///
+///     Ok(())
+/// }
+/// ```
+///
+/// `LPushCommand::if_exists()` method changes `LPUSH` command to `LPUSHX` command
+///
+/// ```rust
+/// use ntex_redis::{cmd, RedisConnector};
+/// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
+/// # fn gen_random_key() -> String {
+/// #    thread_rng().sample_iter(&Alphanumeric).take(12).collect::<String>()
+/// # }
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
+///     let key = gen_random_key();
+///
+///     // create list with one value only if key already exists
+///     redis.exec(
+///         cmd::LPush(&key, "value1")
+///             .value("value2")
+///             .if_exists()
+///     ).await?;
+///
+///     Ok(())
+/// }
+/// ```
 pub fn LPush<T, V>(key: T, value: V) -> LPushCommand
 where
     BulkString: From<T> + From<V>,
@@ -147,6 +238,24 @@ impl LPushCommand {
             "LPUSHX"
         };
         self.0[0] = Request::from_static(cmd);
+        self
+    }
+
+    /// Add a value to this command.
+    pub fn value<T>(mut self, other: T) -> Self
+    where
+        BulkString: From<T>,
+    {
+        self.0.push(other.into());
+        self
+    }
+
+    /// Add more values to this command.
+    pub fn extend<T>(mut self, other: impl IntoIterator<Item = T>) -> Self
+    where
+        BulkString: From<T>,
+    {
+        self.0.extend(other.into_iter().map(|t| t.into()));
         self
     }
 }
