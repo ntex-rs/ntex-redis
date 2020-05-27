@@ -39,11 +39,11 @@ where
             .await
             .ok_or_else(|| CommandError::Protocol(Error::Disconnected))?
             .map_err(CommandError::Protocol)
-            .and_then(U::to_output)
+            .and_then(|res| U::to_output(res.into_result().map_err(CommandError::Error)?))
     }
 
     /// Return inner framed object
     pub fn into_inner(self) -> Framed<T, Codec> {
-        self.0
+        self.framed
     }
 }

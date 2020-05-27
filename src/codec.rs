@@ -31,10 +31,17 @@ impl Encoder for Codec {
                 buf.extend_from_slice(&bstr.0[..]);
                 write_rn(buf);
             }
-            Request::BytesStatic(bstr) => {
+            Request::BulkStatic(bstr) => {
                 let len = bstr.len();
                 write_header(b'$', len as i64, buf, len + 2);
                 buf.extend_from_slice(bstr);
+                write_rn(buf);
+            }
+            Request::BulkInteger(i) => {
+                let mut len_buf = [0; 32];
+                let size = itoa::write(&mut len_buf[..], i).unwrap();
+                write_header(b'$', size as i64, buf, size + 2);
+                buf.extend_from_slice(&len_buf[..size]);
                 write_rn(buf);
             }
             Request::String(ref string) => {
@@ -158,7 +165,10 @@ pub enum Request {
 
     /// A bulk string. In Redis terminology a string is a byte-array, so this is stored as a
     /// vector of `u8`s to allow clients to interpret the bytes as appropriate.
-    BytesStatic(&'static [u8]),
+    BulkStatic(&'static [u8]),
+
+    /// Convert integer to string representation.
+    BulkInteger(i64),
 
     /// A valid utf-8 string
     String(ByteString),
@@ -171,12 +181,12 @@ pub enum Request {
 impl Request {
     /// Create request from static str
     pub fn from_static(data: &'static str) -> Self {
-        Request::BytesStatic(data.as_ref())
+        Request::BulkStatic(data.as_ref())
     }
 
     /// Create request from static str
     pub fn from_bstatic(data: &'static [u8]) -> Self {
-        Request::BytesStatic(data)
+        Request::BulkStatic(data)
     }
 
     #[allow(clippy::should_implement_trait)]

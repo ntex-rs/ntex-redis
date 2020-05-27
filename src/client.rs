@@ -35,8 +35,14 @@ impl Client {
         self.call(cmd.to_request()).map(|result| {
             result
                 .map_err(CommandError::Protocol)
-                .and_then(T::to_output)
+                .and_then(|res| T::to_output(res.into_result().map_err(CommandError::Error)?))
         })
+    }
+
+    /// Delete all the keys of the currently selected DB.
+    pub async fn flushdb(&self) -> Result<(), Error> {
+        self.call("FLUSHDB".into()).await?;
+        Ok(())
     }
 }
 
