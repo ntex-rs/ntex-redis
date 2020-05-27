@@ -6,6 +6,31 @@ use crate::codec::{BulkString, Request, Response};
 /// LINDEX redis command
 ///
 /// Returns the element at index index in the list stored at key.
+///
+/// ```rust
+/// use ntex_redis::{cmd, RedisConnector};
+/// # use rand::{thread_rng, Rng};
+/// # use rand::distributions::Alphanumeric;
+/// # fn gen_random_key() -> String {
+/// # let key: String = thread_rng().sample_iter(&Alphanumeric).take(12).collect();
+/// # key
+/// # }
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
+///     let key = gen_random_key();
+///
+///     // create list with one value
+///     redis.exec(cmd::LPush(&key, "value"));
+///
+///     // get value by index
+///     let value = redis.exec(cmd::LIndex(&key, 0)).await?;
+///
+///     assert_eq!(value.unwrap(), "value");
+///     Ok(())
+/// }
+/// ```
 pub fn LIndex<T>(key: T, index: i64) -> LIndexCommand
 where
     BulkString: From<T>,

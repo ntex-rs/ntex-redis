@@ -26,7 +26,7 @@ where
 pub struct KeysCommand(Vec<Request>);
 
 impl KeysCommand {
-    /// Add more keys to command.
+    /// Add a key to this command.
     pub fn key<T>(mut self, other: T) -> Self
     where
         BulkString: From<T>,
@@ -35,7 +35,7 @@ impl KeysCommand {
         self
     }
 
-    /// Add more keys to command.
+    /// Add more keys to this command.
     pub fn keys<T>(mut self, other: impl IntoIterator<Item = T>) -> Self
     where
         BulkString: From<T>,

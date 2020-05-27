@@ -16,7 +16,7 @@ pub use self::simple::SimpleClient;
 ///
 /// # Examples
 ///
-/// ```
+/// ```rust
 /// #[macro_use]
 /// extern crate ntex_redis;
 ///
@@ -28,7 +28,7 @@ pub use self::simple::SimpleClient;
 ///
 /// For variable length Redis commands:
 ///
-/// ```
+/// ```rust
 /// #[macro_use]
 /// extern crate ntex_redis;
 ///
