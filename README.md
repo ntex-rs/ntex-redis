@@ -34,4 +34,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 This project is licensed under
 
-* MIT license ([LICENSE-MIT](LICENSE-MIT) or [http://opensource.org/licenses/MIT](http://opensource.org/licenses/MIT))
+* MIT license ([LICENSE](LICENSE) or [http://opensource.org/licenses/MIT](http://opensource.org/licenses/MIT))

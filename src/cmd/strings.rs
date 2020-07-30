@@ -1,7 +1,7 @@
 use super::{utils, Command, CommandError};
 use crate::codec::{BulkString, Request, Response};
 
-/// Create GET redis command
+/// GET redis command
 pub fn Get<T>(key: T) -> utils::BulkOutputCommand
 where
     BulkString: From<T>,
@@ -12,7 +12,7 @@ where
     ]))
 }
 
-/// Create SET redis command
+/// SET redis command
 ///
 /// Set key to hold the string value. Command returns true if value is set
 /// otherwise it returns false

@@ -1,7 +1,7 @@
 use super::{Command, CommandError};
 use crate::codec::{BulkString, Request, Response};
 
-/// Create DEL redis command
+/// DEL redis command
 ///
 /// Removes the specified keys. A key is ignored if it does not exist.
 ///
@@ -39,7 +39,7 @@ where
     ])
 }
 
-/// Create EXISTS redis command
+/// EXISTS redis command
 ///
 /// Returns if key exists.
 ///

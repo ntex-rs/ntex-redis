@@ -1,7 +1,7 @@
 use super::{Command, CommandError};
 use crate::codec::{BulkString, Request, Response};
 
-/// Create AUTH redis command
+/// AUTH redis command
 pub fn Auth<T>(password: T) -> AuthCommand
 where
     BulkString: From<T>,
