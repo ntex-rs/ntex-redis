@@ -12,10 +12,10 @@ mod strings;
 mod utils;
 
 pub use self::auth::Auth;
-pub use self::hashes::{HDel, HGet, HLen, HSet};
-pub use self::keys::{Del, Exists};
+pub use self::hashes::{HDel, HGet, HGetAll, HIncrBy, HLen, HSet};
+pub use self::keys::{Del, Exists, Expire, ExpireAt, Ttl, TtlResult};
 pub use self::lists::{LIndex, LPop, LPush, RPop, RPush};
-pub use self::strings::{Get, Set};
+pub use self::strings::{Get, IncrBy, Set};
 
 /// Trait implemented by types that can be used as redis commands
 pub trait Command {
@@ -32,8 +32,8 @@ pub trait Command {
 pub mod commands {
     //! Command implementations
     pub use super::auth::AuthCommand;
-    pub use super::hashes::{HDelCommand, HSetCommand};
-    pub use super::keys::KeysCommand;
+    pub use super::hashes::{HDelCommand, HGetAllCommand, HSetCommand};
+    pub use super::keys::{KeysCommand, TtlCommand};
     pub use super::lists::LPushCommand;
     pub use super::strings::SetCommand;
     pub use super::utils::{BulkOutputCommand, IntOutputCommand};

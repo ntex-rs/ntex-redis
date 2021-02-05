@@ -473,7 +473,7 @@ where
     fn try_from(val: Response) -> Result<HashMap<K, T, S>, Self::Error> {
         match val {
             Response::Array(ary) => {
-                let mut map = HashMap::with_capacity_and_hasher(ary.len(), S::default());
+                let mut map = HashMap::with_capacity_and_hasher(ary.len() / 2, S::default());
                 let mut items = ary.into_iter();
 
                 while let Some(k) = items.next() {

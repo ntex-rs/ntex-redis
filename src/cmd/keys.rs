@@ -1,5 +1,6 @@
-use super::{Command, CommandError};
+use super::{utils, Command, CommandError};
 use crate::codec::{BulkString, Request, Response};
+use std::convert::TryFrom;
 
 /// DEL redis command
 ///
@@ -112,5 +113,74 @@ impl Command for KeysCommand {
             Response::Integer(val) => Ok(val as usize),
             _ => Err(CommandError::Output("Cannot parse response", val)),
         }
+    }
+}
+
+/// EXPIRE redis command
+///
+/// Set a timeout on `key`.
+pub fn Expire<T, S>(key: T, seconds: S) -> utils::BoolOutputCommand
+where
+    BulkString: From<T>,
+    i64: From<S>,
+{
+    utils::BoolOutputCommand(Request::Array(vec![
+        Request::from_static("EXPIRE"),
+        Request::BulkString(key.into()),
+        Request::BulkString(i64::from(seconds).to_string().into()),
+    ]))
+}
+
+/// EXPIREAT redis command
+///
+/// Set a timeout on `key`.
+pub fn ExpireAt<T, S>(key: T, timestamp: S) -> utils::BoolOutputCommand
+where
+    BulkString: From<T>,
+    i64: From<S>,
+{
+    utils::BoolOutputCommand(Request::Array(vec![
+        Request::from_static("EXPIREAT"),
+        Request::BulkString(key.into()),
+        Request::BulkString(i64::from(timestamp).to_string().into()),
+    ]))
+}
+
+/// TTL redis command
+///
+/// Returns the remaining time to live of a `key` that has a timeout.
+pub fn Ttl<T>(key: T) -> TtlCommand
+where
+    BulkString: From<T>,
+{
+    TtlCommand(vec![
+        Request::from_static("TTL"),
+        Request::BulkString(key.into()),
+    ])
+}
+
+#[derive(Debug, PartialEq)]
+pub enum TtlResult {
+    Seconds(i64),
+    NoExpire,
+    NotFound,
+}
+
+pub struct TtlCommand(Vec<Request>);
+
+impl Command for TtlCommand {
+    type Output = TtlResult;
+
+    fn to_request(self) -> Request {
+        Request::Array(self.0)
+    }
+
+    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
+        let result = i64::try_from(val)?;
+        Ok(match result {
+            -1 => TtlResult::NoExpire,
+            -2 => TtlResult::NotFound,
+            s => TtlResult::Seconds(s),
+        })
     }
 }
