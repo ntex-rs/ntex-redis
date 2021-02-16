@@ -11,6 +11,15 @@ license = "MIT"
 exclude = [".gitignore", ".travis.yml", ".cargo/config"]
 edition = "2018"
 
+[features]
+default = []
+
+# openssl
+openssl = ["ntex/openssl"]
+
+# rustls support
+rustls = ["ntex/rustls"]
+
 [dependencies]
 ntex = "0.1.12"
 ntex-codec = "0.1.2"
