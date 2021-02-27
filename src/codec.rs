@@ -6,7 +6,7 @@ use std::{cmp, str};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use bytestring::ByteString;
-use ntex_codec::{Decoder, Encoder};
+use ntex::codec::{Decoder, Encoder};
 
 use super::errors::Error;
 
@@ -17,7 +17,7 @@ impl Encoder for Codec {
     type Item = Request;
     type Error = Error;
 
-    fn encode(&mut self, msg: Request, buf: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&self, msg: Request, buf: &mut BytesMut) -> Result<(), Self::Error> {
         match msg {
             Request::Array(ary) => {
                 write_header(b'*', ary.len() as i64, buf, 0);
@@ -60,7 +60,7 @@ impl Decoder for Codec {
     type Item = Response;
     type Error = Error;
 
-    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         match decode(buf, 0)? {
             Some((pos, item)) => {
                 buf.advance(pos);
@@ -92,7 +92,7 @@ impl BulkString {
 
 impl From<ByteString> for BulkString {
     fn from(val: ByteString) -> BulkString {
-        BulkString(val.into_inner())
+        BulkString(val.into_bytes())
     }
 }
 
@@ -675,7 +675,7 @@ mod tests {
 
     use bytes::{Bytes, BytesMut};
     use bytestring::ByteString;
-    use ntex_codec::{Decoder, Encoder};
+    use ntex::codec::{Decoder, Encoder};
 
     use super::*;
     use crate::array;
@@ -712,7 +712,7 @@ mod tests {
     fn test_bulk_string() {
         let req_object = Request::BulkString(Bytes::from_static(b"THISISATEST").into());
         let mut bytes = BytesMut::new();
-        let mut codec = Codec;
+        let codec = Codec;
         codec.encode(req_object.clone(), &mut bytes).unwrap();
         assert_eq!(b"$11\r\nTHISISATEST\r\n".to_vec(), bytes.to_vec());
 
@@ -725,7 +725,7 @@ mod tests {
     fn test_array() {
         let req_object = Request::Array(vec![b"TEST1".as_ref().into(), b"TEST2".as_ref().into()]);
         let mut bytes = BytesMut::new();
-        let mut codec = Codec;
+        let codec = Codec;
         codec.encode(req_object.clone(), &mut bytes).unwrap();
         assert_eq!(
             b"*2\r\n$5\r\nTEST1\r\n$5\r\nTEST2\r\n".to_vec(),
@@ -745,7 +745,7 @@ mod tests {
         let mut bytes = BytesMut::new();
         bytes.extend_from_slice(&b"$-1\r\n"[..]);
 
-        let mut codec = Codec;
+        let codec = Codec;
         let deserialized = codec.decode(&mut bytes).unwrap().unwrap();
         assert_eq!(deserialized, Response::Nil);
     }
