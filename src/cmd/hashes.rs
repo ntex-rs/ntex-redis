@@ -13,7 +13,7 @@ use crate::codec::{BulkString, Request, Response};
 /// use ntex_redis::{cmd, RedisConnector};
 /// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
 /// # fn gen_random_key() -> String {
-/// #    thread_rng().sample_iter(&Alphanumeric).take(12).collect::<String>()
+/// #    thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
 /// # }
 ///
 /// #[ntex::main]
@@ -77,7 +77,7 @@ impl Command for HGetAllCommand {
 /// use ntex_redis::{cmd, RedisConnector};
 /// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
 /// # fn gen_random_key() -> String {
-/// #    thread_rng().sample_iter(&Alphanumeric).take(12).collect::<String>()
+/// #    thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
 /// # }
 ///
 /// #[ntex::main]
@@ -144,7 +144,7 @@ impl Command for HSetCommand {
 /// use ntex_redis::{cmd, RedisConnector};
 /// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
 /// # fn gen_random_key() -> String {
-/// #    thread_rng().sample_iter(&Alphanumeric).take(12).collect::<String>()
+/// #    thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
 /// # }
 ///
 /// #[ntex::main]
@@ -218,7 +218,7 @@ impl Command for HDelCommand {
 /// use ntex_redis::{cmd, RedisConnector};
 /// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
 /// # fn gen_random_key() -> String {
-/// #    thread_rng().sample_iter(&Alphanumeric).take(12).collect::<String>()
+/// #    thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
 /// # }
 ///
 /// #[ntex::main]
