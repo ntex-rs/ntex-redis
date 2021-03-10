@@ -19,7 +19,7 @@ use std::convert::TryFrom;
 ///     let key = gen_random_key();
 ///
 ///     // set string value
-///     redis.exec(cmd::Set(&key, "value"));
+///     redis.exec(cmd::Set(&key, "value")).await?;
 ///
 ///     // remove keys
 ///     let value = redis.exec(
@@ -57,12 +57,11 @@ where
 ///     let key = gen_random_key();
 ///
 ///     // set string value
-///     redis.exec(cmd::Set(&key, "value"));
+///     redis.exec(cmd::Set(&key, "value")).await?;
 ///
 ///     // check keys existence
 ///     let value = redis.exec(
-///         cmd::Exists(&key)
-///             .keys(vec!["test_1", "test_2"])
+///         cmd::Exists(&key).keys(vec!["test_1", "test_2"])
 ///     ).await?;
 ///
 ///     assert_eq!(value, 1);

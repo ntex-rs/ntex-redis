@@ -18,7 +18,7 @@ use crate::codec::{BulkString, Request, Response};
 ///     let key = gen_random_key();
 ///
 ///     // create list with one value
-///     redis.exec(cmd::LPush(&key, "value"));
+///     redis.exec(cmd::LPush(&key, "value")).await?;
 ///
 ///     // get value by index
 ///     let value = redis.exec(cmd::LIndex(&key, 0)).await?;

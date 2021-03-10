@@ -79,7 +79,7 @@ async fn test_keys() {
     let expire_at = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
-        + Duration::from_secs(10);
+        + Duration::from_millis(10250);
     let resp = redis
         .exec(cmd::ExpireAt(&key1, expire_at.as_secs() as i64))
         .await

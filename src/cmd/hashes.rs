@@ -22,7 +22,7 @@ use crate::codec::{BulkString, Request, Response};
 ///     let key = gen_random_key();
 ///
 ///     // create hashmap
-///     redis.exec(cmd::HSet(&key, "test-key", "value"));
+///     redis.exec(cmd::HSet(&key, "test-key", "value")).await?;
 ///
 ///     // get field value
 ///     let value = redis.exec(cmd::HGet(&key, "test-key")).await?;
@@ -86,7 +86,7 @@ impl Command for HGetAllCommand {
 ///     let key = gen_random_key();
 ///
 ///     // create hashmap and set field
-///     redis.exec(cmd::HSet(&key, "test-key", "value"));
+///     redis.exec(cmd::HSet(&key, "test-key", "value")).await?;
 ///
 ///     // get field value
 ///     let value = redis.exec(cmd::HGet(&key, "test-key")).await?;
@@ -153,7 +153,7 @@ impl Command for HSetCommand {
 ///     let key = gen_random_key();
 ///
 ///     // create hashmap and set field
-///     redis.exec(cmd::HSet(&key, "test-key", "value"));
+///     redis.exec(cmd::HSet(&key, "test-key", "value")).await?;
 ///
 ///     // delete hashmap field
 ///     let value = redis.exec(cmd::HDel(&key, "test-key")).await?;
@@ -227,7 +227,7 @@ impl Command for HDelCommand {
 ///     let key = gen_random_key();
 ///
 ///     // create hashmap and set field
-///     redis.exec(cmd::HSet(&key, "test-key", "value"));
+///     redis.exec(cmd::HSet(&key, "test-key", "value")).await?;
 ///
 ///     // get len of hashmap
 ///     let value = redis.exec(cmd::HLen(&key)).await?;
