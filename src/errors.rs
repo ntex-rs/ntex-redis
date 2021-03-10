@@ -4,6 +4,7 @@ use std::io;
 use bytestring::ByteString;
 use derive_more::{Display, From};
 use ntex::connect;
+use ntex::util::Either;
 
 use super::codec::Response;
 
@@ -41,6 +42,15 @@ impl From<io::Error> for Error {
     }
 }
 
+impl From<Either<Error, io::Error>> for Error {
+    fn from(err: Either<Error, io::Error>) -> Error {
+        match err {
+            Either::Left(err) => err,
+            Either::Right(err) => Error::Io(Some(err)),
+        }
+    }
+}
+
 #[derive(Debug, Display, From)]
 /// Redis connectivity errors
 pub enum ConnectError {
@@ -69,3 +79,9 @@ pub enum CommandError {
 }
 
 impl std::error::Error for CommandError {}
+
+impl From<Either<Error, io::Error>> for CommandError {
+    fn from(err: Either<Error, io::Error>) -> CommandError {
+        Into::<Error>::into(err).into()
+    }
+}

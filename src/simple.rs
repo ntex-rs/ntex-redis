@@ -38,7 +38,7 @@ where
             .next()
             .await
             .ok_or_else(|| CommandError::Protocol(Error::Disconnected))?
-            .map_err(CommandError::Protocol)
+            .map_err(Into::into)
             .and_then(|res| U::to_output(res.into_result().map_err(CommandError::Error)?))
     }
 

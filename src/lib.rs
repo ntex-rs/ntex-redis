@@ -37,7 +37,7 @@ pub mod errors;
 mod simple;
 mod transport;
 
-pub use self::client::Client;
+pub use self::client::{Client, CommandResult};
 pub use self::connector::RedisConnector;
 pub use self::simple::SimpleClient;
 

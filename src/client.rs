@@ -44,6 +44,11 @@ impl Client {
         self.call("FLUSHDB".into()).await?;
         Ok(())
     }
+
+    /// Returns false if underlying transport is disconnected from Redis
+    pub fn is_connected(&self) -> bool {
+        !self.transport.is_closed()
+    }
 }
 
 impl Service for Client {

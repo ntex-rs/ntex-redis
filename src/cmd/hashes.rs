@@ -1,3 +1,6 @@
+use bytes::Bytes;
+use std::{collections::HashMap, convert::TryFrom};
+
 use super::{utils, Command, CommandError};
 use crate::codec::{BulkString, Request, Response};
 
@@ -36,6 +39,33 @@ where
         Request::BulkString(key.into()),
         Request::BulkString(field.into()),
     ]))
+}
+
+/// HGETALL redis command
+///
+/// Returns all fields and values of the hash stored at `key`
+pub fn HGetAll<T>(key: T) -> HGetAllCommand
+where
+    BulkString: From<T>,
+{
+    HGetAllCommand(vec![
+        Request::from_static("HGETALL"),
+        Request::BulkString(key.into()),
+    ])
+}
+
+pub struct HGetAllCommand(Vec<Request>);
+
+impl Command for HGetAllCommand {
+    type Output = HashMap<Bytes, Bytes>;
+
+    fn to_request(self) -> Request {
+        Request::Array(self.0)
+    }
+
+    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
+        Ok(HashMap::try_from(val)?)
+    }
 }
 
 /// HSET redis command
@@ -212,5 +242,21 @@ where
     utils::IntOutputCommand(Request::Array(vec![
         Request::from_static("HLEN"),
         Request::BulkString(key.into()),
+    ]))
+}
+
+/// HINCRBY redis command
+///
+/// Increments the number stored at `field` in the hash stored at `key` by `increment`.
+pub fn HIncrBy<T, K, I>(key: T, field: K, increment: I) -> utils::IntOutputCommand
+where
+    BulkString: From<T> + From<K>,
+    i64: From<I>,
+{
+    utils::IntOutputCommand(Request::Array(vec![
+        Request::from_static("HINCRBY"),
+        Request::BulkString(key.into()),
+        Request::BulkString(field.into()),
+        Request::BulkString(i64::from(increment).to_string().into()),
     ]))
 }

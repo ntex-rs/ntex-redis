@@ -69,7 +69,7 @@ where
                     Poll::Ready(Ok(_)) => (),
                     Poll::Ready(Err(err)) => {
                         log::debug!("Error sending data: {:?}", err);
-                        self.failed(err);
+                        self.failed(err.into());
                         return Poll::Ready(());
                     }
                 }
@@ -91,7 +91,7 @@ where
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Some(Err(err))) => {
                     log::trace!("Client disconnected with error: {:?}", err);
-                    self.failed(err);
+                    self.failed(err.into());
                     return Poll::Ready(());
                 }
                 Poll::Ready(None) => {

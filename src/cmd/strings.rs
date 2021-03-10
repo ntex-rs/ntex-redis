@@ -125,3 +125,18 @@ impl Command for SetCommand {
         }
     }
 }
+
+/// INCRBY redis command
+///
+/// Increments the number stored at `key` by `increment`.
+pub fn IncrBy<T, I>(key: T, increment: I) -> utils::IntOutputCommand
+where
+    BulkString: From<T>,
+    i64: From<I>,
+{
+    utils::IntOutputCommand(Request::Array(vec![
+        Request::from_static("INCRBY"),
+        Request::BulkString(key.into()),
+        Request::BulkString(i64::from(increment).to_string().into()),
+    ]))
+}
