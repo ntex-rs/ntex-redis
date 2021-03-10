@@ -1,5 +1,6 @@
-use bytes::Bytes;
-use std::{collections::HashMap, convert::TryFrom};
+use std::convert::TryFrom;
+
+use ntex::util::{Bytes, HashMap};
 
 use super::{utils, Command, CommandError};
 use crate::codec::{BulkString, Request, Response};

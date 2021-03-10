@@ -5,7 +5,7 @@ redis client for ntex framework
 ## Documentation & community resources
 
 * [Documentation](https://docs.rs/ntex-redis)
-* Minimum supported Rust version: 1.42 or later
+* Minimum supported Rust version: 1.45 or later
 
 ## Example
 

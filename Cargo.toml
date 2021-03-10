@@ -21,9 +21,7 @@ openssl = ["ntex/openssl"]
 rustls = ["ntex/rustls"]
 
 [dependencies]
-ntex = "0.3.3"
-bytes = "1.0"
-bytestring = "1.0"
+ntex = "0.3.7"
 derive_more = "0.99.5"
 futures = "0.3.13"
 itoa = "0.4.5"
@@ -31,5 +29,5 @@ btoi = "0.4.2"
 log = "0.4"
 
 [dev-dependencies]
-rand = "0.7"
-env_logger = "0.7"
+rand = "0.8"
+env_logger = "0.8"

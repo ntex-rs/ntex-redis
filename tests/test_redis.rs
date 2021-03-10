@@ -1,7 +1,6 @@
+use ntex::util::HashMap;
 use ntex_redis::{cmd, Client, RedisConnector};
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
-use std::collections::HashMap;
+use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::time::{Duration, SystemTime};
 
 async fn connect() -> Client {
@@ -12,7 +11,11 @@ async fn connect() -> Client {
 }
 
 fn new_key() -> String {
-    thread_rng().sample_iter(&Alphanumeric).take(12).collect()
+    thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(12)
+        .map(char::from)
+        .collect()
 }
 
 #[ntex::test]
@@ -168,7 +171,7 @@ async fn test_hashes() {
     assert_eq!(result.unwrap(), "11");
 
     let result = redis.exec(cmd::HGetAll(&key)).await.unwrap();
-    let mut expected = HashMap::new();
+    let mut expected = HashMap::default();
     expected.insert("field1".into(), "11".into());
     expected.insert("field2".into(), "2".into());
     assert_eq!(result, expected);

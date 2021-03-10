@@ -1,10 +1,8 @@
 //! Redis protocol related errors
 use std::io;
 
-use bytestring::ByteString;
 use derive_more::{Display, From};
-use ntex::connect;
-use ntex::util::Either;
+use ntex::{connect, util::ByteString, util::Either};
 
 use super::codec::Response;
 

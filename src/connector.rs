@@ -1,9 +1,9 @@
-use bytestring::ByteString;
 use futures::Future;
 use ntex::channel::mpsc;
 use ntex::codec::{AsyncRead, AsyncWrite, Framed};
 use ntex::connect::{self, Address, Connect, Connector};
 use ntex::service::Service;
+use ntex::util::ByteString;
 
 #[cfg(feature = "openssl")]
 use ntex::connect::openssl::{OpensslConnector, SslConnector};

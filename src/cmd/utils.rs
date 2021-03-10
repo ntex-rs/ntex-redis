@@ -1,4 +1,4 @@
-use bytes::Bytes;
+use ntex::util::Bytes;
 use std::convert::TryFrom;
 
 use super::{Command, CommandError};

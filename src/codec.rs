@@ -1,12 +1,8 @@
 //! Redis protocol codec
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::hash::{BuildHasher, Hash};
-use std::{cmp, str};
+use std::{cmp, collections::HashMap, convert::TryFrom, hash::BuildHasher, hash::Hash, str};
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-use bytestring::ByteString;
 use ntex::codec::{Decoder, Encoder};
+use ntex::util::{Buf, BufMut, ByteString, Bytes, BytesMut};
 
 use super::errors::Error;
 
@@ -670,12 +666,10 @@ fn scan_string(buf: &mut BytesMut, idx: usize) -> Result<Option<(usize, ByteStri
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::convert::TryFrom;
 
-    use bytes::{Bytes, BytesMut};
-    use bytestring::ByteString;
     use ntex::codec::{Decoder, Encoder};
+    use ntex::util::{ByteString, Bytes, BytesMut, HashMap};
 
     use super::*;
     use crate::array;
@@ -772,7 +766,7 @@ mod tests {
 
     #[test]
     fn test_hashmap_conversion() {
-        let mut expected = HashMap::new();
+        let mut expected = HashMap::default();
         expected.insert(
             ByteString::from("KEY1").into(),
             ByteString::from("VALUE1").into(),

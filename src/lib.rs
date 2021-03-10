@@ -7,7 +7,7 @@
 //! # use rand::{thread_rng, Rng};
 //! # use rand::distributions::Alphanumeric;
 //! # fn gen_random_key() -> String {
-//! # let key: String = thread_rng().sample_iter(&Alphanumeric).take(12).collect();
+//! # let key: String = thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect();
 //! # key
 //! # }
 //!
@@ -79,6 +79,10 @@ pub fn gen_random_key() -> String {
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
 
-    let key: String = thread_rng().sample_iter(&Alphanumeric).take(12).collect();
+    let key: String = thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(12)
+        .map(char::from)
+        .collect();
     key
 }
