@@ -1,5 +1,5 @@
-use futures::{SinkExt, StreamExt};
 use ntex::codec::{AsyncRead, AsyncWrite, Framed};
+use ntex::util::{next, send};
 
 use super::cmd::Command;
 use super::codec::Codec;
@@ -33,9 +33,8 @@ where
     where
         U: Command,
     {
-        self.framed.send(cmd.to_request()).await?;
-        self.framed
-            .next()
+        send(&mut self.framed, cmd.to_request()).await?;
+        next(&mut self.framed)
             .await
             .ok_or_else(|| CommandError::Protocol(Error::Disconnected))?
             .map_err(Into::into)

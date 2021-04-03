@@ -1,8 +1,5 @@
-use std::fmt;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{fmt, future::Future, pin::Pin, task::Context, task::Poll};
 
-use futures::{ready, Future, FutureExt};
 use ntex::channel::{mpsc, pool};
 use ntex::service::Service;
 
@@ -32,11 +29,13 @@ impl Client {
     where
         T: Command,
     {
-        self.call(cmd.to_request()).map(|result| {
-            result
+        let fut = self.call(cmd.to_request());
+
+        async move {
+            fut.await
                 .map_err(CommandError::Protocol)
                 .and_then(|res| T::to_output(res.into_result().map_err(CommandError::Error)?))
-        })
+        }
     }
 
     /// Delete all the keys of the currently selected DB.
@@ -88,9 +87,10 @@ impl Future for CommandResult {
     type Output = Result<Response, Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match ready!(Pin::new(&mut self.rx).poll(cx)) {
-            Ok(res) => Poll::Ready(res),
-            Err(_) => Poll::Ready(Err(Error::Disconnected)),
+        match Pin::new(&mut self.rx).poll(cx) {
+            Poll::Ready(Ok(res)) => Poll::Ready(res),
+            Poll::Ready(Err(_)) => Poll::Ready(Err(Error::Disconnected)),
+            Poll::Pending => Poll::Pending,
         }
     }
 }

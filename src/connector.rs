@@ -1,4 +1,5 @@
-use futures::Future;
+use std::future::Future;
+
 use ntex::channel::mpsc;
 use ntex::codec::{AsyncRead, AsyncWrite, Framed};
 use ntex::connect::{self, Address, Connect, Connector};
@@ -10,8 +11,6 @@ use ntex::connect::openssl::{OpensslConnector, SslConnector};
 
 #[cfg(feature = "rustls")]
 use ntex::connect::rustls::{ClientConfig, RustlsConnector};
-#[cfg(feature = "rustls")]
-use std::sync::Arc;
 
 use super::codec::Codec;
 use super::errors::ConnectError;

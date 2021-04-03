@@ -1,10 +1,8 @@
-use std::collections::VecDeque;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{collections::VecDeque, future::Future, pin::Pin, task::Context, task::Poll};
 
-use futures::{Future, Stream};
 use ntex::channel::{mpsc, pool};
 use ntex::codec::{AsyncRead, AsyncWrite, Framed};
+use ntex::Stream;
 
 use super::codec::{Codec, Request, Response};
 use super::errors::Error;

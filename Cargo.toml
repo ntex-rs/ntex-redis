@@ -1,6 +1,6 @@
 [package]
 name = "ntex-redis"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Redis client"
 documentation = "https://docs.rs/ntex-redis"
@@ -21,9 +21,8 @@ openssl = ["ntex/openssl"]
 rustls = ["ntex/rustls"]
 
 [dependencies]
-ntex = "0.3.7"
-derive_more = "0.99.5"
-futures = "0.3.13"
+ntex = "0.3.14"
+derive_more = "0.99"
 itoa = "0.4.5"
 btoi = "0.4.2"
 log = "0.4"
