@@ -106,7 +106,7 @@ where
 
     #[cfg(feature = "rustls")]
     /// Use rustls connector.
-    pub fn rustls(self, config: Arc<ClientConfig>) -> RedisConnector<A, RustlsConnector<A>> {
+    pub fn rustls(self, config: std::sync::Arc<ClientConfig>) -> RedisConnector<A, RustlsConnector<A>> {
         RedisConnector {
             address: self.address,
             passwords: self.passwords,
