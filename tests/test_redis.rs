@@ -38,6 +38,7 @@ async fn test_auth_simple() {
 
 #[ntex::test]
 async fn test_strings() {
+    env_logger::init();
     let redis = connect().await;
     let key = new_key();
     let result = redis.exec(cmd::Set(&key, "1")).await.unwrap();

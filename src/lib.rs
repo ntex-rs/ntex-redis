@@ -35,7 +35,7 @@ pub mod codec;
 mod connector;
 pub mod errors;
 mod simple;
-mod transport;
+// mod transport;
 
 pub use self::client::{Client, CommandResult};
 pub use self::connector::RedisConnector;

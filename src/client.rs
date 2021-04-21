@@ -1,25 +1,66 @@
-use std::{fmt, future::Future, pin::Pin, task::Context, task::Poll};
+use std::collections::VecDeque;
+use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use ntex::channel::{mpsc, pool};
-use ntex::service::Service;
+use ntex::util::{poll_fn, Either, Ready};
+use ntex::{channel::pool, framed::State, service::Service};
 
 use super::cmd::Command;
-use super::codec::{Request, Response};
+use super::codec::{Codec, Request, Response};
 use super::errors::{CommandError, Error};
 
 #[derive(Clone)]
 /// Shared redis client
 pub struct Client {
+    state: State,
+    queue: Rc<RefCell<VecDeque<pool::Sender<Result<Response, Error>>>>>,
     pool: pool::Pool<Result<Response, Error>>,
-    transport: mpsc::Sender<(Request, pool::Sender<Result<Response, Error>>)>,
 }
 
 impl Client {
-    pub(crate) fn new(
-        transport: mpsc::Sender<(Request, pool::Sender<Result<Response, Error>>)>,
-    ) -> Self {
+    pub(crate) fn new(state: State) -> Self {
+        let queue: Rc<RefCell<VecDeque<pool::Sender<Result<Response, Error>>>>> =
+            Rc::new(RefCell::new(VecDeque::new()));
+
+        // read redis response task
+        let state2 = state.clone();
+        let queue2 = queue.clone();
+        ntex::rt::spawn(async move {
+            let read = state2.read();
+
+            poll_fn(|cx| {
+                loop {
+                    match read.decode(&Codec) {
+                        Err(e) => {
+                            if let Some(tx) = queue2.borrow_mut().pop_front() {
+                                let _ = tx.send(Err(e.into()));
+                            }
+                            queue2.borrow_mut().clear();
+                            state2.shutdown_io();
+                            return Poll::Ready(());
+                        }
+                        Ok(Some(item)) => {
+                            if let Some(tx) = queue2.borrow_mut().pop_front() {
+                                let _ = tx.send(Ok(item));
+                            } else {
+                                log::error!("Unexpected redis response: {:?}", item);
+                            }
+                        }
+                        Ok(None) => break,
+                    }
+                }
+
+                if !state2.is_open() {
+                    return Poll::Ready(());
+                }
+                state2.register_dispatcher(cx.waker());
+                Poll::Pending
+            })
+            .await
+        });
+
         Client {
-            transport,
+            state,
+            queue,
             pool: pool::new(),
         }
     }
@@ -29,12 +70,17 @@ impl Client {
     where
         T: Command,
     {
+        let is_open = self.state.is_open();
         let fut = self.call(cmd.to_request());
 
         async move {
-            fut.await
-                .map_err(CommandError::Protocol)
-                .and_then(|res| T::to_output(res.into_result().map_err(CommandError::Error)?))
+            if !is_open {
+                Err(CommandError::Protocol(Error::Disconnected))
+            } else {
+                fut.await
+                    .map_err(CommandError::Protocol)
+                    .and_then(|res| T::to_output(res.into_result().map_err(CommandError::Error)?))
+            }
         }
     }
 
@@ -44,9 +90,9 @@ impl Client {
         Ok(())
     }
 
-    /// Returns false if underlying transport is disconnected from Redis
+    /// Returns true if underlying transport is connected to redis
     pub fn is_connected(&self) -> bool {
-        !self.transport.is_closed()
+        self.state.is_open()
     }
 }
 
@@ -54,10 +100,10 @@ impl Service for Client {
     type Request = Request;
     type Response = Response;
     type Error = Error;
-    type Future = CommandResult;
+    type Future = Either<CommandResult, Ready<Response, Error>>;
 
     fn poll_ready(&self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if self.transport.is_closed() {
+        if !self.state.is_open() {
             Poll::Ready(Err(Error::Disconnected))
         } else {
             Poll::Ready(Ok(()))
@@ -65,16 +111,20 @@ impl Service for Client {
     }
 
     fn call(&self, req: Request) -> Self::Future {
-        let (tx, rx) = self.pool.channel();
-        let _ = self.transport.send((req, tx));
-        CommandResult { rx }
+        if let Err(e) = self.state.write().encode(req, &Codec) {
+            Either::Right(Ready::Err(e))
+        } else {
+            let (tx, rx) = self.pool.channel();
+            self.queue.borrow_mut().push_back(tx);
+            Either::Left(CommandResult { rx })
+        }
     }
 }
 
 impl fmt::Debug for Client {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Client")
-            .field("connected", &!self.transport.is_closed())
+            .field("connected", &self.state.is_open())
             .finish()
     }
 }
