@@ -474,13 +474,10 @@ where
 
                 while let Some(k) = items.next() {
                     let key = K::try_from(k)?;
-                    let value = T::try_from(items.next().ok_or_else(|| {
-                        (
-                            "Cannot convert an odd number of elements into a hashmap",
-                            Response::Nil,
-                        )
-                    })?)?;
-
+                    let value = T::try_from(items.next().ok_or((
+                        "Cannot convert an odd number of elements into a hashmap",
+                        Response::Nil,
+                    ))?)?;
                     map.insert(key, value);
                 }
 

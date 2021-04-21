@@ -8,18 +8,19 @@ use super::cmd::Command;
 use super::codec::{Codec, Request, Response};
 use super::errors::{CommandError, Error};
 
+type Queue = Rc<RefCell<VecDeque<pool::Sender<Result<Response, Error>>>>>;
+
 #[derive(Clone)]
 /// Shared redis client
 pub struct Client {
     state: State,
-    queue: Rc<RefCell<VecDeque<pool::Sender<Result<Response, Error>>>>>,
+    queue: Queue,
     pool: pool::Pool<Result<Response, Error>>,
 }
 
 impl Client {
     pub(crate) fn new(state: State) -> Self {
-        let queue: Rc<RefCell<VecDeque<pool::Sender<Result<Response, Error>>>>> =
-            Rc::new(RefCell::new(VecDeque::new()));
+        let queue: Queue = Rc::new(RefCell::new(VecDeque::new()));
 
         // read redis response task
         let state2 = state.clone();
@@ -32,7 +33,7 @@ impl Client {
                     match read.decode(&Codec) {
                         Err(e) => {
                             if let Some(tx) = queue2.borrow_mut().pop_front() {
-                                let _ = tx.send(Err(e.into()));
+                                let _ = tx.send(Err(e));
                             }
                             queue2.borrow_mut().clear();
                             state2.shutdown_io();

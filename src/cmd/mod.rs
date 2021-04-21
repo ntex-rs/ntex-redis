@@ -1,5 +1,5 @@
 //! Redis commands
-#![allow(non_snake_case)]
+#![allow(non_snake_case, clippy::wrong_self_convention)]
 
 use super::codec::{Request, Response};
 use super::errors::CommandError;
