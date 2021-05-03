@@ -8,39 +8,42 @@ use super::cmd::Command;
 use super::codec::{Codec, Request, Response};
 use super::errors::{CommandError, Error};
 
-type Queue = Rc<RefCell<VecDeque<pool::Sender<Result<Response, Error>>>>>;
-
 #[derive(Clone)]
 /// Shared redis client
-pub struct Client {
+pub struct Client(Rc<Inner>);
+
+struct Inner {
     state: State,
-    queue: Queue,
+    queue: RefCell<VecDeque<pool::Sender<Result<Response, Error>>>>,
     pool: pool::Pool<Result<Response, Error>>,
 }
 
 impl Client {
     pub(crate) fn new(state: State) -> Self {
-        let queue: Queue = Rc::new(RefCell::new(VecDeque::new()));
+        let inner = Rc::new(Inner {
+            state,
+            pool: pool::new(),
+            queue: RefCell::new(VecDeque::new()),
+        });
+        let inner2 = inner.clone();
 
         // read redis response task
-        let state2 = state.clone();
-        let queue2 = queue.clone();
         ntex::rt::spawn(async move {
-            let read = state2.read();
+            let read = inner.state.read();
 
             poll_fn(|cx| {
                 loop {
                     match read.decode(&Codec) {
                         Err(e) => {
-                            if let Some(tx) = queue2.borrow_mut().pop_front() {
+                            if let Some(tx) = inner.queue.borrow_mut().pop_front() {
                                 let _ = tx.send(Err(e));
                             }
-                            queue2.borrow_mut().clear();
-                            state2.shutdown_io();
+                            inner.queue.borrow_mut().clear();
+                            inner.state.shutdown_io();
                             return Poll::Ready(());
                         }
                         Ok(Some(item)) => {
-                            if let Some(tx) = queue2.borrow_mut().pop_front() {
+                            if let Some(tx) = inner.queue.borrow_mut().pop_front() {
                                 let _ = tx.send(Ok(item));
                             } else {
                                 log::error!("Unexpected redis response: {:?}", item);
@@ -50,20 +53,16 @@ impl Client {
                     }
                 }
 
-                if !state2.is_open() {
+                if !inner.state.is_open() {
                     return Poll::Ready(());
                 }
-                state2.register_dispatcher(cx.waker());
+                inner.state.register_dispatcher(cx.waker());
                 Poll::Pending
             })
             .await
         });
 
-        Client {
-            state,
-            queue,
-            pool: pool::new(),
-        }
+        Client(inner2)
     }
 
     /// Execute redis command
@@ -71,7 +70,7 @@ impl Client {
     where
         T: Command,
     {
-        let is_open = self.state.is_open();
+        let is_open = self.0.state.is_open();
         let fut = self.call(cmd.to_request());
 
         async move {
@@ -93,7 +92,7 @@ impl Client {
 
     /// Returns true if underlying transport is connected to redis
     pub fn is_connected(&self) -> bool {
-        self.state.is_open()
+        self.0.state.is_open()
     }
 }
 
@@ -104,7 +103,7 @@ impl Service for Client {
     type Future = Either<CommandResult, Ready<Response, Error>>;
 
     fn poll_ready(&self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if !self.state.is_open() {
+        if !self.0.state.is_open() {
             Poll::Ready(Err(Error::Disconnected))
         } else {
             Poll::Ready(Ok(()))
@@ -112,11 +111,11 @@ impl Service for Client {
     }
 
     fn call(&self, req: Request) -> Self::Future {
-        if let Err(e) = self.state.write().encode(req, &Codec) {
+        if let Err(e) = self.0.state.write().encode(req, &Codec) {
             Either::Right(Ready::Err(e))
         } else {
-            let (tx, rx) = self.pool.channel();
-            self.queue.borrow_mut().push_back(tx);
+            let (tx, rx) = self.0.pool.channel();
+            self.0.queue.borrow_mut().push_back(tx);
             Either::Left(CommandResult { rx })
         }
     }
@@ -125,7 +124,7 @@ impl Service for Client {
 impl fmt::Debug for Client {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Client")
-            .field("connected", &self.state.is_open())
+            .field("connected", &self.0.state.is_open())
             .finish()
     }
 }

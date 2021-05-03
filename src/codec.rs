@@ -134,6 +134,12 @@ impl<'a> From<&'a Bytes> for BulkString {
     }
 }
 
+impl<'a> From<&'a ByteString> for BulkString {
+    fn from(val: &'a ByteString) -> BulkString {
+        BulkString(val.clone().into_bytes())
+    }
+}
+
 impl<'a> From<&'a [u8]> for BulkString {
     fn from(val: &'a [u8]) -> BulkString {
         BulkString(Bytes::copy_from_slice(val))

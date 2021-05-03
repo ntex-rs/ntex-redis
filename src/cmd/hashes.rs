@@ -110,14 +110,33 @@ where
 pub struct HSetCommand(Vec<Request>);
 
 impl HSetCommand {
-    /// Insert field to a redis hashmap
-    pub fn insert<K, V>(mut self, field: K, value: V) -> Self
+    /// Insert new entry to a redis hashmap
+    pub fn entry<K, V>(mut self, field: K, value: V) -> Self
     where
         BulkString: From<K> + From<V>,
     {
         self.0.push(field.into());
         self.0.push(value.into());
         self
+    }
+
+    /// Insert new entry to a redis hashmap
+    pub fn add_entry<K, V>(&mut self, field: K, value: V)
+    where
+        BulkString: From<K> + From<V>,
+    {
+        self.0.push(field.into());
+        self.0.push(value.into());
+    }
+
+    #[doc(hidden)]
+    #[deprecated(since = "0.1.3", note = "Please use the `entry` function instead")]
+    /// Insert field to a redis hashmap
+    pub fn insert<K, V>(self, field: K, value: V) -> Self
+    where
+        BulkString: From<K> + From<V>,
+    {
+        self.entry(field, value)
     }
 }
 
