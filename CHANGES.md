@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.3] - 2021-05-05
+
+* cmd: Rename HSet::insert() to HSet::entry()
+
 ## [0.1.2] - 2021-04-21
 
 * use ntex::framed for redis transports
