@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0] - 2021-06-27
+
+* upgrade to ntex-0.4
+
 ## [0.1.3] - 2021-05-05
 
 * cmd: Rename HSet::insert() to HSet::entry()
