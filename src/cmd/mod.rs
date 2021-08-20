@@ -5,6 +5,7 @@ use super::codec::{Request, Response};
 use super::errors::CommandError;
 
 mod auth;
+mod connection;
 mod hashes;
 mod keys;
 mod lists;
@@ -12,6 +13,7 @@ mod strings;
 mod utils;
 
 pub use self::auth::Auth;
+pub use self::connection::{Ping, Select};
 pub use self::hashes::{HDel, HGet, HGetAll, HIncrBy, HLen, HSet};
 pub use self::keys::{Del, Exists, Expire, ExpireAt, Ttl, TtlResult};
 pub use self::lists::{LIndex, LPop, LPush, RPop, RPush};

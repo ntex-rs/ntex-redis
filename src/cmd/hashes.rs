@@ -128,16 +128,6 @@ impl HSetCommand {
         self.0.push(field.into());
         self.0.push(value.into());
     }
-
-    #[doc(hidden)]
-    #[deprecated(since = "0.1.3", note = "Please use the `entry` function instead")]
-    /// Insert field to a redis hashmap
-    pub fn insert<K, V>(self, field: K, value: V) -> Self
-    where
-        BulkString: From<K> + From<V>,
-    {
-        self.entry(field, value)
-    }
 }
 
 impl Command for HSetCommand {

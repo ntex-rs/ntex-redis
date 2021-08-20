@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.1] - 2021-08-20
+
+* cmd: Add Select and Ping commands
+
 ## [0.2.0] - 2021-06-27
 
 * upgrade to ntex-0.4

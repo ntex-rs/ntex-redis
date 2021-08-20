@@ -160,7 +160,7 @@ async fn test_hashes() {
     let key = new_key();
 
     let result = redis
-        .exec(cmd::HSet(&key, "field1", "1").insert("field2", "2"))
+        .exec(cmd::HSet(&key, "field1", "1").entry("field2", "2"))
         .await
         .unwrap();
     assert_eq!(result, 2);
@@ -188,4 +188,15 @@ async fn test_hashes() {
 
     let result = redis.exec(cmd::HGetAll(&key)).await.unwrap();
     assert!(result.is_empty());
+}
+
+#[ntex::test]
+async fn test_connection() {
+    let redis = connect().await;
+
+    let result = redis.exec(cmd::Ping()).await.unwrap();
+    assert_eq!(result, "PONG");
+
+    let result = redis.exec(cmd::Select(1)).await.unwrap();
+    assert!(result);
 }
