@@ -3,8 +3,7 @@ use std::{cell::RefCell, future::Future, rc::Rc};
 use ntex::codec::{AsyncRead, AsyncWrite};
 use ntex::connect::{self, Address, Connect, Connector};
 use ntex::framed::{ReadTask, State, WriteTask};
-use ntex::service::Service;
-use ntex::util::ByteString;
+use ntex::{service::Service, time::Seconds, util::ByteString};
 
 #[cfg(feature = "openssl")]
 use ntex::connect::openssl::{OpensslConnector, SslConnector};
@@ -131,7 +130,7 @@ where
         async move {
             let io = fut.await?;
 
-            let state = State::with_params(read_hw, write_hw, lw, 0);
+            let state = State::with_params(read_hw, write_hw, lw, Seconds::ZERO);
             let io = Rc::new(RefCell::new(io));
             ntex::rt::spawn(ReadTask::new(io.clone(), state.clone()));
             ntex::rt::spawn(WriteTask::new(io, state.clone()));
@@ -162,7 +161,7 @@ where
         async move {
             let io = fut.await?;
 
-            let state = State::with_params(read_hw, write_hw, lw, 0);
+            let state = State::with_params(read_hw, write_hw, lw, Seconds::ZERO);
             let io = Rc::new(RefCell::new(io));
             ntex::rt::spawn(ReadTask::new(io.clone(), state.clone()));
             ntex::rt::spawn(WriteTask::new(io, state.clone()));

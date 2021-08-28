@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.2] - 2021-08-28
+
+* use new ntex's timer api
+
 ## [0.2.1] - 2021-08-20
 
 * cmd: Add Select and Ping commands
