@@ -552,7 +552,7 @@ fn write_string(symb: u8, string: &str, buf: &mut BytesMut) {
 type DecodeResult = Result<Option<(usize, Response)>, Error>;
 
 fn decode(buf: &mut BytesMut, idx: usize) -> DecodeResult {
-    if !buf.is_empty() {
+    if buf.len() > idx {
         match buf[idx] {
             b'$' => decode_bytes(buf, idx + 1),
             b'*' => decode_array(buf, idx + 1),

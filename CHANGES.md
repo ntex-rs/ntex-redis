@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.3] - 2021-09-03
+
+* Fix panic during protocol decoding
+
 ## [0.2.2] - 2021-08-28
 
 * use new ntex's timer api
