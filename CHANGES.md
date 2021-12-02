@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.4] - 2021-12-02
+
+* Add memory pools support
+
 ## [0.2.3] - 2021-09-03
 
 * Fix panic during protocol decoding
