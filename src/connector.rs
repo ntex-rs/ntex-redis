@@ -1,14 +1,14 @@
 use std::future::Future;
 
 use ntex::connect::{self, Address, Connect, Connector};
-use ntex::io::{Io, IoBoxed};
+use ntex::io::{Filter, Io, IoBoxed};
 use ntex::{service::Service, time::Seconds, util::ByteString, util::PoolId, util::PoolRef};
 
 #[cfg(feature = "openssl")]
-use ntex::connect::openssl::{OpensslConnector, SslConnector};
+use ntex::connect::openssl::{self, SslConnector};
 
 #[cfg(feature = "rustls")]
-use ntex::connect::rustls::{ClientConfig, RustlsConnector};
+use ntex::connect::rustls::{self, ClientConfig};
 
 use super::errors::ConnectError;
 use super::{cmd, Client, SimpleClient};
@@ -27,11 +27,16 @@ where
 {
     #[allow(clippy::new_ret_no_self)]
     /// Create new redis connector
-    pub fn new(address: A) -> RedisConnector<A, Connector<A>> {
+    pub fn new(
+        address: A,
+    ) -> RedisConnector<
+        A,
+        impl Service<Request = Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
+    > {
         RedisConnector {
             address,
             passwords: Vec::new(),
-            connector: Connector::default(),
+            connector: Connector::default().map(|io| io.into_boxed()),
             pool: PoolId::P7.pool_ref(),
         }
     }
@@ -62,12 +67,19 @@ where
     }
 
     /// Use custom connector
-    pub fn connector<U, F>(self, connector: U) -> RedisConnector<A, U>
+    pub fn connector<U, F>(
+        self,
+        connector: U,
+    ) -> RedisConnector<
+        A,
+        impl Service<Request = Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
+    >
     where
+        F: Filter,
         U: Service<Request = Connect<A>, Response = Io<F>, Error = connect::ConnectError>,
     {
         RedisConnector {
-            connector,
+            connector: connector.map(|io| io.into_boxed()),
             address: self.address,
             passwords: self.passwords,
             pool: self.pool,
@@ -76,11 +88,17 @@ where
 
     #[cfg(feature = "openssl")]
     /// Use openssl connector.
-    pub fn openssl(self, connector: SslConnector) -> RedisConnector<A, OpensslConnector<A>> {
+    pub fn openssl(
+        self,
+        connector: SslConnector,
+    ) -> RedisConnector<
+        A,
+        impl Service<Request = Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
+    > {
         RedisConnector {
             address: self.address,
             passwords: self.passwords,
-            connector: OpensslConnector::new(connector),
+            connector: openssl::Connector::new(connector).map(|io| io.into_boxed()),
             pool: self.pool,
         }
     }
@@ -89,12 +107,15 @@ where
     /// Use rustls connector.
     pub fn rustls(
         self,
-        config: std::sync::Arc<ClientConfig>,
-    ) -> RedisConnector<A, RustlsConnector<A>> {
+        config: ClientConfig,
+    ) -> RedisConnector<
+        A,
+        impl Service<Request = Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
+    > {
         RedisConnector {
             address: self.address,
             passwords: self.passwords,
-            connector: RustlsConnector::new(config),
+            connector: rustls::Connector::new(config).map(|io| io.into_boxed()),
             pool: self.pool,
         }
     }

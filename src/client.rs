@@ -55,7 +55,7 @@ impl Client {
                 if io.is_closed() {
                     return Poll::Ready(());
                 }
-                if let Err(_) = read.poll_read_ready(cx) {
+                if read.poll_read_ready(cx).is_err() {
                     Poll::Ready(())
                 } else {
                     Poll::Pending
