@@ -1,8 +1,7 @@
-use std::{cell::RefCell, future::Future, rc::Rc};
+use std::future::Future;
 
-use ntex::codec::{AsyncRead, AsyncWrite};
 use ntex::connect::{self, Address, Connect, Connector};
-use ntex::framed::{ReadTask, State, WriteTask};
+use ntex::io::{Io, IoBoxed};
 use ntex::{service::Service, time::Seconds, util::ByteString, util::PoolId, util::PoolRef};
 
 #[cfg(feature = "openssl")]
@@ -41,8 +40,7 @@ where
 impl<A, T> RedisConnector<A, T>
 where
     A: Address + Clone,
-    T: Service<Request = Connect<A>, Error = connect::ConnectError>,
-    T::Response: AsyncRead + AsyncWrite + Unpin + 'static,
+    T: Service<Request = Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
 {
     /// Add redis auth password
     pub fn password<U>(mut self, password: U) -> Self
@@ -63,26 +61,10 @@ where
         self
     }
 
-    #[doc(hidden)]
-    #[deprecated(since = "0.2.4", note = "Use memory pool config")]
-    #[inline]
-    /// Set read/write buffer params
-    ///
-    /// By default read buffer is 16kb, write buffer is 16kb
-    pub fn buffer_params(
-        self,
-        _max_read_buf_size: u16,
-        _max_write_buf_size: u16,
-        _min_buf_size: u16,
-    ) -> Self {
-        self
-    }
-
     /// Use custom connector
-    pub fn connector<U>(self, connector: U) -> RedisConnector<A, U>
+    pub fn connector<U, F>(self, connector: U) -> RedisConnector<A, U>
     where
-        U: Service<Request = Connect<A>, Error = connect::ConnectError>,
-        U::Response: AsyncRead + AsyncWrite + Unpin + 'static,
+        U: Service<Request = Connect<A>, Response = Io<F>, Error = connect::ConnectError>,
     {
         RedisConnector {
             connector,
@@ -125,14 +107,10 @@ where
 
         async move {
             let io = fut.await?;
+            io.set_memory_pool(pool);
+            io.set_disconnect_timeout(Seconds::ZERO.into());
 
-            let state = State::with_memory_pool(pool);
-            state.set_disconnect_timeout(Seconds::ZERO);
-            let io = Rc::new(RefCell::new(io));
-            ntex::rt::spawn(ReadTask::new(io.clone(), state.clone()));
-            ntex::rt::spawn(WriteTask::new(io, state.clone()));
-
-            let client = Client::new(state);
+            let client = Client::new(io);
 
             if passwords.is_empty() {
                 Ok(client)
@@ -155,14 +133,10 @@ where
 
         async move {
             let io = fut.await?;
+            io.set_memory_pool(pool);
+            io.set_disconnect_timeout(Seconds::ZERO.into());
 
-            let state = State::with_memory_pool(pool);
-            state.set_disconnect_timeout(Seconds::ZERO);
-            let io = Rc::new(RefCell::new(io));
-            ntex::rt::spawn(ReadTask::new(io.clone(), state.clone()));
-            ntex::rt::spawn(WriteTask::new(io, state.clone()));
-
-            let mut client = SimpleClient::new(state);
+            let mut client = SimpleClient::new(io);
 
             if passwords.is_empty() {
                 Ok(client)

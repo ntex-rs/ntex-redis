@@ -1,6 +1,6 @@
 use std::task::Poll;
 
-use ntex::{framed::State, util::poll_fn};
+use ntex::{io::IoBoxed, util::poll_fn};
 
 use super::cmd::Command;
 use super::codec::Codec;
@@ -8,13 +8,13 @@ use super::errors::{CommandError, Error};
 
 /// Redis client
 pub struct SimpleClient {
-    state: State,
+    io: IoBoxed,
 }
 
 impl SimpleClient {
     /// Create new simple client
-    pub(crate) fn new(state: State) -> Self {
-        SimpleClient { state }
+    pub(crate) fn new(io: IoBoxed) -> Self {
+        SimpleClient { io }
     }
 
     /// Execute redis command
@@ -22,9 +22,9 @@ impl SimpleClient {
     where
         U: Command,
     {
-        self.state.write().encode(cmd.to_request(), &Codec)?;
+        self.io.write().encode(cmd.to_request(), &Codec)?;
 
-        let read = self.state.read();
+        let read = self.io.read();
         poll_fn(|cx| {
             if let Some(item) = read.decode(&Codec)? {
                 return Poll::Ready(U::to_output(
@@ -32,12 +32,11 @@ impl SimpleClient {
                 ));
             }
 
-            if !self.state.is_open() {
-                return Poll::Ready(Err(CommandError::Protocol(Error::Disconnected)));
+            if let Err(err) = read.poll_read_ready(cx) {
+                Poll::Ready(Err(CommandError::Protocol(Error::Io(err))))
+            } else {
+                Poll::Pending
             }
-
-            self.state.register_dispatcher(cx.waker());
-            Poll::Pending
         })
         .await
     }
