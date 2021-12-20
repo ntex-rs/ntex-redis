@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0-b.0] - 2021-12-19
+
+* upgrade to ntex 0.5
+
 ## [0.2.4] - 2021-12-02
 
 * Add memory pools support

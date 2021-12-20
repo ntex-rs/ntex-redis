@@ -104,7 +104,7 @@ async fn test_keys() {
 
 #[ntex::test]
 async fn test_strings_simple() {
-    let mut redis = RedisConnector::new("127.0.0.1:6379")
+    let redis = RedisConnector::new("127.0.0.1:6379")
         .connect_simple()
         .await
         .unwrap();
