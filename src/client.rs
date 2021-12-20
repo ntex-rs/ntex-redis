@@ -28,32 +28,34 @@ impl Client {
         let io_ref = io.get_ref();
         let queue2 = queue.clone();
         ntex::rt::spawn(async move {
-            poll_fn(|cx| match ready!(io.poll_read_next(&Codec, cx)) {
-                Some(Ok(item)) => {
-                    if let Some(tx) = queue2.borrow_mut().pop_front() {
-                        let _ = tx.send(Ok(item));
-                    } else {
-                        log::error!("Unexpected redis response: {:?}", item);
+            poll_fn(|cx| loop {
+                match ready!(io.poll_read_next(&Codec, cx)) {
+                    Some(Ok(item)) => {
+                        if let Some(tx) = queue2.borrow_mut().pop_front() {
+                            let _ = tx.send(Ok(item));
+                        } else {
+                            log::error!("Unexpected redis response: {:?}", item);
+                        }
+                        continue;
                     }
-                    Poll::Pending
-                }
-                Some(Err(Either::Left(e))) => {
-                    if let Some(tx) = queue2.borrow_mut().pop_front() {
-                        let _ = tx.send(Err(e));
+                    Some(Err(Either::Left(e))) => {
+                        if let Some(tx) = queue2.borrow_mut().pop_front() {
+                            let _ = tx.send(Err(e));
+                        }
+                        queue2.borrow_mut().clear();
+                        let _ = ready!(io.poll_shutdown(cx));
+                        return Poll::Ready(());
                     }
-                    queue2.borrow_mut().clear();
-                    let _ = ready!(io.poll_shutdown(cx));
-                    return Poll::Ready(());
-                }
-                Some(Err(Either::Right(e))) => {
-                    if let Some(tx) = queue2.borrow_mut().pop_front() {
-                        let _ = tx.send(Err(e.into()));
+                    Some(Err(Either::Right(e))) => {
+                        if let Some(tx) = queue2.borrow_mut().pop_front() {
+                            let _ = tx.send(Err(e.into()));
+                        }
+                        queue2.borrow_mut().clear();
+                        let _ = ready!(io.poll_shutdown(cx));
+                        return Poll::Ready(());
                     }
-                    queue2.borrow_mut().clear();
-                    let _ = ready!(io.poll_shutdown(cx));
-                    return Poll::Ready(());
+                    None => return Poll::Ready(()),
                 }
-                None => Poll::Ready(()),
             })
             .await
         });
