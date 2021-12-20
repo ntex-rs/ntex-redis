@@ -157,7 +157,7 @@ where
             io.set_memory_pool(pool);
             io.set_disconnect_timeout(Seconds::ZERO.into());
 
-            let mut client = SimpleClient::new(io);
+            let client = SimpleClient::new(io);
 
             if passwords.is_empty() {
                 Ok(client)

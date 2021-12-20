@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use ntex::io::{IoBoxed, IoRef, OnDisconnect};
-use ntex::util::{poll_fn, Either, Ready};
+use ntex::util::{poll_fn, ready, Either, Ready};
 use ntex::{channel::pool, service::Service};
 
 use super::cmd::Command;
@@ -28,38 +28,32 @@ impl Client {
         let io_ref = io.get_ref();
         let queue2 = queue.clone();
         ntex::rt::spawn(async move {
-            let read = io.read();
-
-            poll_fn(|cx| {
-                loop {
-                    match read.decode(&Codec) {
-                        Err(e) => {
-                            if let Some(tx) = queue2.borrow_mut().pop_front() {
-                                let _ = tx.send(Err(e));
-                            }
-                            queue2.borrow_mut().clear();
-                            let _ = io.poll_shutdown(cx);
-                            return Poll::Ready(());
-                        }
-                        Ok(Some(item)) => {
-                            if let Some(tx) = queue2.borrow_mut().pop_front() {
-                                let _ = tx.send(Ok(item));
-                            } else {
-                                log::error!("Unexpected redis response: {:?}", item);
-                            }
-                        }
-                        Ok(None) => break,
+            poll_fn(|cx| match ready!(io.poll_read_next(&Codec, cx)) {
+                Some(Ok(item)) => {
+                    if let Some(tx) = queue2.borrow_mut().pop_front() {
+                        let _ = tx.send(Ok(item));
+                    } else {
+                        log::error!("Unexpected redis response: {:?}", item);
                     }
-                }
-
-                if io.is_closed() {
-                    return Poll::Ready(());
-                }
-                if read.poll_read_ready(cx).is_err() {
-                    Poll::Ready(())
-                } else {
                     Poll::Pending
                 }
+                Some(Err(Either::Left(e))) => {
+                    if let Some(tx) = queue2.borrow_mut().pop_front() {
+                        let _ = tx.send(Err(e));
+                    }
+                    queue2.borrow_mut().clear();
+                    let _ = ready!(io.poll_shutdown(cx));
+                    return Poll::Ready(());
+                }
+                Some(Err(Either::Right(e))) => {
+                    if let Some(tx) = queue2.borrow_mut().pop_front() {
+                        let _ = tx.send(Err(e.into()));
+                    }
+                    queue2.borrow_mut().clear();
+                    let _ = ready!(io.poll_shutdown(cx));
+                    return Poll::Ready(());
+                }
+                None => Poll::Ready(()),
             })
             .await
         });
@@ -120,7 +114,7 @@ impl Service for Client {
     }
 
     fn call(&self, req: Request) -> Self::Future {
-        if let Err(e) = self.io.write().encode(req, &Codec) {
+        if let Err(e) = self.io.encode(req, &Codec) {
             Either::Right(Ready::Err(e))
         } else {
             let (tx, rx) = self.pool.channel();

@@ -1,6 +1,6 @@
 use std::task::Poll;
 
-use ntex::{io::IoBoxed, util::poll_fn};
+use ntex::{io::IoBoxed, util::poll_fn, util::ready, util::Either};
 
 use super::cmd::Command;
 use super::codec::Codec;
@@ -18,25 +18,19 @@ impl SimpleClient {
     }
 
     /// Execute redis command
-    pub async fn exec<U>(&mut self, cmd: U) -> Result<U::Output, CommandError>
+    pub async fn exec<U>(&self, cmd: U) -> Result<U::Output, CommandError>
     where
         U: Command,
     {
-        self.io.write().encode(cmd.to_request(), &Codec)?;
+        self.io.encode(cmd.to_request(), &Codec)?;
 
-        let read = self.io.read();
-        poll_fn(|cx| {
-            if let Some(item) = read.decode(&Codec)? {
-                return Poll::Ready(U::to_output(
-                    item.into_result().map_err(CommandError::Error)?,
-                ));
-            }
-
-            if let Err(err) = read.poll_read_ready(cx) {
-                Poll::Ready(Err(CommandError::Protocol(Error::Io(err))))
-            } else {
-                Poll::Pending
-            }
+        poll_fn(|cx| match ready!(self.io.poll_read_next(&Codec, cx)) {
+            Some(Ok(item)) => Poll::Ready(U::to_output(
+                item.into_result().map_err(CommandError::Error)?,
+            )),
+            Some(Err(Either::Left(err))) => Poll::Ready(Err(CommandError::Protocol(err))),
+            Some(Err(Either::Right(err))) => Poll::Ready(Err(CommandError::Protocol(err.into()))),
+            None => Poll::Ready(Err(CommandError::Protocol(Error::Disconnected))),
         })
         .await
     }
