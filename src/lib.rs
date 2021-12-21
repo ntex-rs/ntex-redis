@@ -35,7 +35,6 @@ pub mod codec;
 mod connector;
 pub mod errors;
 mod simple;
-// mod transport;
 
 pub use self::client::{Client, CommandResult};
 pub use self::connector::RedisConnector;
@@ -79,10 +78,6 @@ pub fn gen_random_key() -> String {
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
 
-    let key: String = thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(12)
-        .map(char::from)
-        .collect();
+    let key: String = thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect();
     key
 }

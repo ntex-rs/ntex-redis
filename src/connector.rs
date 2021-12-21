@@ -86,6 +86,22 @@ where
         }
     }
 
+    /// Use custom boxed connector
+    pub fn boxed_connector<U>(
+        self,
+        connector: U,
+    ) -> RedisConnector<A, U>
+    where
+        U: Service<Request = Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
+    {
+        RedisConnector {
+            connector,
+            address: self.address,
+            passwords: self.passwords,
+            pool: self.pool,
+        }
+    }
+
     #[cfg(feature = "openssl")]
     /// Use openssl connector.
     pub fn openssl(
