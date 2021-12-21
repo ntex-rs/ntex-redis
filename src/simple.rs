@@ -25,12 +25,12 @@ impl SimpleClient {
         self.io.encode(cmd.to_request(), &Codec)?;
 
         poll_fn(|cx| match ready!(self.io.poll_recv(&Codec, cx)) {
-            Some(Ok(item)) => Poll::Ready(U::to_output(
+            Ok(Some(item)) => Poll::Ready(U::to_output(
                 item.into_result().map_err(CommandError::Error)?,
             )),
-            Some(Err(Either::Left(err))) => Poll::Ready(Err(CommandError::Protocol(err))),
-            Some(Err(Either::Right(err))) => Poll::Ready(Err(CommandError::Protocol(err.into()))),
-            None => Poll::Ready(Err(CommandError::Protocol(Error::Disconnected))),
+            Err(Either::Left(err)) => Poll::Ready(Err(CommandError::Protocol(err))),
+            Err(Either::Right(err)) => Poll::Ready(Err(CommandError::Protocol(err.into()))),
+            Ok(None) => Poll::Ready(Err(CommandError::Protocol(Error::Disconnected))),
         })
         .await
     }

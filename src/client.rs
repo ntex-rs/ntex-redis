@@ -30,7 +30,7 @@ impl Client {
         ntex::rt::spawn(async move {
             poll_fn(|cx| loop {
                 match ready!(io.poll_recv(&Codec, cx)) {
-                    Some(Ok(item)) => {
+                    Ok(Some(item)) => {
                         if let Some(tx) = queue2.borrow_mut().pop_front() {
                             let _ = tx.send(Ok(item));
                         } else {
@@ -38,7 +38,7 @@ impl Client {
                         }
                         continue;
                     }
-                    Some(Err(Either::Left(e))) => {
+                    Err(Either::Left(e)) => {
                         if let Some(tx) = queue2.borrow_mut().pop_front() {
                             let _ = tx.send(Err(e));
                         }
@@ -46,7 +46,7 @@ impl Client {
                         let _ = ready!(io.poll_shutdown(cx));
                         return Poll::Ready(());
                     }
-                    Some(Err(Either::Right(e))) => {
+                    Err(Either::Right(e)) => {
                         if let Some(tx) = queue2.borrow_mut().pop_front() {
                             let _ = tx.send(Err(e.into()));
                         }
@@ -54,7 +54,7 @@ impl Client {
                         let _ = ready!(io.poll_shutdown(cx));
                         return Poll::Ready(());
                     }
-                    None => return Poll::Ready(()),
+                    Ok(None) => return Poll::Ready(()),
                 }
             })
             .await
