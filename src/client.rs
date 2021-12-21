@@ -29,7 +29,7 @@ impl Client {
         let queue2 = queue.clone();
         ntex::rt::spawn(async move {
             poll_fn(|cx| loop {
-                match ready!(io.poll_read_next(&Codec, cx)) {
+                match ready!(io.poll_recv(&Codec, cx)) {
                     Some(Ok(item)) => {
                         if let Some(tx) = queue2.borrow_mut().pop_front() {
                             let _ = tx.send(Ok(item));

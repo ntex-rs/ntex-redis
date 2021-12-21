@@ -24,7 +24,7 @@ impl SimpleClient {
     {
         self.io.encode(cmd.to_request(), &Codec)?;
 
-        poll_fn(|cx| match ready!(self.io.poll_read_next(&Codec, cx)) {
+        poll_fn(|cx| match ready!(self.io.poll_recv(&Codec, cx)) {
             Some(Ok(item)) => Poll::Ready(U::to_output(
                 item.into_result().map_err(CommandError::Error)?,
             )),
