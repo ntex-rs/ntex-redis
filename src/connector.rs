@@ -31,12 +31,12 @@ where
         address: A,
     ) -> RedisConnector<
         A,
-        impl Service<Request = Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
+        impl Service<Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
     > {
         RedisConnector {
             address,
             passwords: Vec::new(),
-            connector: Connector::default().map(|io| io.into_boxed()),
+            connector: Connector::default().map(|io| io.seal()),
             pool: PoolId::P7.pool_ref(),
         }
     }
@@ -45,7 +45,7 @@ where
 impl<A, T> RedisConnector<A, T>
 where
     A: Address + Clone,
-    T: Service<Request = Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
+    T: Service<Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
 {
     /// Add redis auth password
     pub fn password<U>(mut self, password: U) -> Self
@@ -72,14 +72,14 @@ where
         connector: U,
     ) -> RedisConnector<
         A,
-        impl Service<Request = Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
+        impl Service<Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
     >
     where
         F: Filter,
-        U: Service<Request = Connect<A>, Response = Io<F>, Error = connect::ConnectError>,
+        U: Service<Connect<A>, Response = Io<F>, Error = connect::ConnectError>,
     {
         RedisConnector {
-            connector: connector.map(|io| io.into_boxed()),
+            connector: connector.map(|io| io.seal()),
             address: self.address,
             passwords: self.passwords,
             pool: self.pool,
@@ -89,7 +89,7 @@ where
     /// Use custom boxed connector
     pub fn boxed_connector<U>(self, connector: U) -> RedisConnector<A, U>
     where
-        U: Service<Request = Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
+        U: Service<Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
     {
         RedisConnector {
             connector,
@@ -106,7 +106,7 @@ where
         connector: SslConnector,
     ) -> RedisConnector<
         A,
-        impl Service<Request = Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
+        impl Service<Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
     > {
         RedisConnector {
             address: self.address,

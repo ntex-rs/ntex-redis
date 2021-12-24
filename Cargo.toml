@@ -1,6 +1,6 @@
 [package]
 name = "ntex-redis"
-version = "0.3.0-b.1"
+version = "0.3.0-b.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Redis client"
 documentation = "https://docs.rs/ntex-redis"
@@ -21,7 +21,7 @@ openssl = ["ntex/openssl"]
 rustls = ["ntex/rustls"]
 
 [dependencies]
-ntex = "0.5.0-b.2"
+ntex = "0.5.0-b.3"
 itoa = "0.4.5"
 btoi = "0.4.2"
 log = "0.4"
@@ -30,3 +30,10 @@ derive_more = "0.99"
 [dev-dependencies]
 rand = "0.8"
 env_logger = "0.9"
+
+[patch.crates-io]
+ntex = { git = "https://github.com/ntex-rs/ntex.git" }
+ntex-io = { git = "https://github.com/ntex-rs/ntex.git" }
+ntex-rt = { git = "https://github.com/ntex-rs/ntex.git" }
+ntex-service = { git = "https://github.com/ntex-rs/ntex.git" }
+ntex-tls = { git = "https://github.com/ntex-rs/ntex.git" }

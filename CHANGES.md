@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0-b.2] - 2021-12-xx
+
+* Update service trait
+
 ## [0.3.0-b.1] - 2021-12-22
 
 * Upgrade to ntex 0.5.0 b.2

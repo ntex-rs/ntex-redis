@@ -101,8 +101,7 @@ impl Client {
     }
 }
 
-impl Service for Client {
-    type Request = Request;
+impl Service<Request> for Client {
     type Response = Response;
     type Error = Error;
     type Future = Either<CommandResult, Ready<Response, Error>>;
