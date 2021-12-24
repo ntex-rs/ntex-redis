@@ -30,10 +30,3 @@ derive_more = "0.99"
 [dev-dependencies]
 rand = "0.8"
 env_logger = "0.9"
-
-[patch.crates-io]
-ntex = { git = "https://github.com/ntex-rs/ntex.git" }
-ntex-io = { git = "https://github.com/ntex-rs/ntex.git" }
-ntex-rt = { git = "https://github.com/ntex-rs/ntex.git" }
-ntex-service = { git = "https://github.com/ntex-rs/ntex.git" }
-ntex-tls = { git = "https://github.com/ntex-rs/ntex.git" }

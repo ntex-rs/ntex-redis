@@ -1,6 +1,6 @@
 # Changes
 
-## [0.3.0-b.2] - 2021-12-xx
+## [0.3.0-b.2] - 2021-12-24
 
 * Update service trait
 
