@@ -1,6 +1,6 @@
 [package]
 name = "ntex-redis"
-version = "0.3.0-b.2"
+version = "0.3.0-b.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Redis client"
 documentation = "https://docs.rs/ntex-redis"

@@ -37,11 +37,7 @@ where
     }
 }
 
-impl<A, T> RedisConnector<A, T>
-where
-    A: Address + Clone,
-    T: Service<Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
-{
+impl<A, T> RedisConnector<A, T> {
     /// Add redis auth password
     pub fn password<U>(mut self, password: U) -> Self
     where
@@ -62,19 +58,26 @@ where
     }
 
     /// Use custom connector
-    pub fn connector<Io, U>(
-        self,
-        connector: U,
-    ) -> RedisConnector<
-        A,
-        impl Service<Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
-    >
+    pub fn connector<Io, U>(self, connector: U) -> RedisConnector<A, Boxed<U, Connect<A>>>
     where
         U: Service<Connect<A>, Response = Io, Error = connect::ConnectError>,
         IoBoxed: From<Io>,
     {
         RedisConnector {
-            connector: connector.map(|io| IoBoxed::from(io)),
+            connector: Boxed::new(connector),
+            address: self.address,
+            passwords: self.passwords,
+            pool: self.pool,
+        }
+    }
+
+    /// Use custom boxed connector
+    pub fn boxed_connector<U>(self, connector: U) -> RedisConnector<A, U>
+    where
+        U: Service<Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
+    {
+        RedisConnector {
+            connector,
             address: self.address,
             passwords: self.passwords,
             pool: self.pool,
@@ -90,7 +93,7 @@ where
         RedisConnector {
             address: self.address,
             passwords: self.passwords,
-            connector: openssl::Connector::new(connector).seal(),
+            connector: Boxed::new(openssl::Connector::new(connector)),
             pool: self.pool,
         }
     }
@@ -100,18 +103,21 @@ where
     pub fn rustls(
         self,
         config: ClientConfig,
-    ) -> RedisConnector<
-        A,
-        impl Service<Request = Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
-    > {
+    ) -> RedisConnector<A, Boxed<rustls::Connector<A>, Connect<A>>> {
         RedisConnector {
             address: self.address,
             passwords: self.passwords,
-            connector: rustls::Connector::new(config).map(|io| IoBoxed::from(io)),
+            connector: Boxed::new(rustls::Connector::new(config)),
             pool: self.pool,
         }
     }
+}
 
+impl<A, T> RedisConnector<A, T>
+where
+    A: Address + Clone,
+    T: Service<Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
+{
     /// Connect to redis server and create shared client
     pub fn connect(&self) -> impl Future<Output = Result<Client, ConnectError>> {
         let pool = self.pool;
