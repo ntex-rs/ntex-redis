@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use ntex::io::{IoBoxed, IoRef, OnDisconnect};
+use ntex::io::{IoBoxed, IoRef, OnDisconnect, RecvError};
 use ntex::util::{poll_fn, ready, Either, Ready};
 use ntex::{channel::pool, service::Service};
 
@@ -30,7 +30,7 @@ impl Client {
         ntex::rt::spawn(async move {
             poll_fn(|cx| loop {
                 match ready!(io.poll_recv(&Codec, cx)) {
-                    Ok(Some(item)) => {
+                    Ok(item) => {
                         if let Some(tx) = queue2.borrow_mut().pop_front() {
                             let _ = tx.send(Ok(item));
                         } else {
@@ -38,7 +38,17 @@ impl Client {
                         }
                         continue;
                     }
-                    Err(Either::Left(e)) => {
+                    Err(RecvError::KeepAlive) | Err(RecvError::Stop) => {
+                        unreachable!()
+                    }
+                    Err(RecvError::WriteBackpressure) => {
+                        if ready!(io.poll_flush(cx, false)).is_err() {
+                            return Poll::Ready(());
+                        } else {
+                            continue;
+                        }
+                    }
+                    Err(RecvError::Decoder(e)) => {
                         if let Some(tx) = queue2.borrow_mut().pop_front() {
                             let _ = tx.send(Err(e));
                         }
@@ -46,15 +56,11 @@ impl Client {
                         let _ = ready!(io.poll_shutdown(cx));
                         return Poll::Ready(());
                     }
-                    Err(Either::Right(e)) => {
-                        if let Some(tx) = queue2.borrow_mut().pop_front() {
-                            let _ = tx.send(Err(e.into()));
-                        }
+                    Err(RecvError::PeerGone(e)) => {
+                        log::info!("Redis connection is dropped: {:?}", e);
                         queue2.borrow_mut().clear();
-                        let _ = ready!(io.poll_shutdown(cx));
                         return Poll::Ready(());
                     }
-                    Ok(None) => return Poll::Ready(()),
                 }
             })
             .await
@@ -80,7 +86,7 @@ impl Client {
 
         async move {
             if !is_open {
-                Err(CommandError::Protocol(Error::Disconnected))
+                Err(CommandError::Protocol(Error::PeerGone(None)))
             } else {
                 fut.await
                     .map_err(CommandError::Protocol)
@@ -108,7 +114,7 @@ impl Service<Request> for Client {
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if self.disconnect.poll_ready(cx).is_ready() {
-            Poll::Ready(Err(Error::Disconnected))
+            Poll::Ready(Err(Error::PeerGone(None)))
         } else {
             Poll::Ready(Ok(()))
         }
@@ -143,7 +149,7 @@ impl Future for CommandResult {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match Pin::new(&mut self.rx).poll(cx) {
             Poll::Ready(Ok(res)) => Poll::Ready(res),
-            Poll::Ready(Err(_)) => Poll::Ready(Err(Error::Disconnected)),
+            Poll::Ready(Err(_)) => Poll::Ready(Err(Error::PeerGone(None))),
             Poll::Pending => Poll::Pending,
         }
     }

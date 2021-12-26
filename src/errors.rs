@@ -15,11 +15,7 @@ pub enum Error {
 
     /// An IO error occurred
     #[display(fmt = "Io error: {:?}", _0)]
-    Io(Option<io::Error>),
-
-    /// Connection is disconnected
-    #[display(fmt = "Redis server has been disconnected")]
-    Disconnected,
+    PeerGone(Option<io::Error>),
 }
 
 impl std::error::Error for Error {}
@@ -28,15 +24,14 @@ impl Clone for Error {
     fn clone(&self) -> Self {
         match self {
             Error::Parse(_) => Error::Parse(String::new()),
-            Error::Io(_) => Error::Io(None),
-            Error::Disconnected => Error::Disconnected,
+            Error::PeerGone(_) => Error::PeerGone(None),
         }
     }
 }
 
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Error {
-        Error::Io(Some(err))
+        Error::PeerGone(Some(err))
     }
 }
 
@@ -44,7 +39,7 @@ impl From<Either<Error, io::Error>> for Error {
     fn from(err: Either<Error, io::Error>) -> Error {
         match err {
             Either::Left(err) => err,
-            Either::Right(err) => Error::Io(Some(err)),
+            Either::Right(err) => Error::PeerGone(Some(err)),
         }
     }
 }

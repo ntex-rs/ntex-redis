@@ -1,6 +1,6 @@
 use std::task::Poll;
 
-use ntex::{io::IoBoxed, util::poll_fn, util::ready, util::Either};
+use ntex::{io::IoBoxed, io::RecvError, util::poll_fn, util::ready};
 
 use super::cmd::Command;
 use super::codec::Codec;
@@ -24,13 +24,24 @@ impl SimpleClient {
     {
         self.io.encode(cmd.to_request(), &Codec)?;
 
-        poll_fn(|cx| match ready!(self.io.poll_recv(&Codec, cx)) {
-            Ok(Some(item)) => Poll::Ready(U::to_output(
-                item.into_result().map_err(CommandError::Error)?,
-            )),
-            Err(Either::Left(err)) => Poll::Ready(Err(CommandError::Protocol(err))),
-            Err(Either::Right(err)) => Poll::Ready(Err(CommandError::Protocol(err.into()))),
-            Ok(None) => Poll::Ready(Err(CommandError::Protocol(Error::Disconnected))),
+        poll_fn(|cx| loop {
+            return match ready!(self.io.poll_recv(&Codec, cx)) {
+                Ok(item) => Poll::Ready(U::to_output(
+                    item.into_result().map_err(CommandError::Error)?,
+                )),
+                Err(RecvError::KeepAlive) | Err(RecvError::Stop) => {
+                    unreachable!()
+                }
+                Err(RecvError::WriteBackpressure) => {
+                    ready!(self.io.poll_flush(cx, false))
+                        .map_err(|e| CommandError::Protocol(Error::PeerGone(Some(e))))?;
+                    continue;
+                }
+                Err(RecvError::Decoder(err)) => Poll::Ready(Err(CommandError::Protocol(err))),
+                Err(RecvError::PeerGone(err)) => {
+                    Poll::Ready(Err(CommandError::Protocol(Error::PeerGone(err))))
+                }
+            };
         })
         .await
     }
