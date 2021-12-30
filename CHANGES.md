@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0] - 2021-12-30
+
+* Upgrade to ntex 0.5.0
+
 ## [0.3.0-b.3] - 2021-12-25
 
 * Add RedisConnector::boxed_connector()

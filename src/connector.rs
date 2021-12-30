@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use ntex::connect::{self, Address, Connect, Connector};
-use ntex::io::{Boxed, IoBoxed};
+use ntex::io::{utils::Boxed, IoBoxed};
 use ntex::{service::Service, time::Seconds, util::ByteString, util::PoolId, util::PoolRef};
 
 #[cfg(feature = "openssl")]

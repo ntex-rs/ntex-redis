@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use ntex::io::{IoBoxed, IoRef, OnDisconnect, RecvError};
+use ntex::io::{utils::OnDisconnect, IoBoxed, IoRef, RecvError};
 use ntex::util::{poll_fn, ready, Either, Ready};
 use ntex::{channel::pool, service::Service};
 
