@@ -45,4 +45,8 @@ impl SimpleClient {
         })
         .await
     }
+
+    pub(crate) fn into_inner(self) -> IoBoxed {
+        self.io
+    }
 }

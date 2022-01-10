@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use ntex::io::{utils::OnDisconnect, IoBoxed, IoRef, RecvError};
+use ntex::io::{IoBoxed, IoRef, OnDisconnect, RecvError};
 use ntex::util::{poll_fn, ready, Either, Ready};
 use ntex::{channel::pool, service::Service};
 
@@ -146,11 +146,10 @@ pub struct CommandResult {
 impl Future for CommandResult {
     type Output = Result<Response, Error>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match Pin::new(&mut self.rx).poll(cx) {
-            Poll::Ready(Ok(res)) => Poll::Ready(res),
-            Poll::Ready(Err(_)) => Poll::Ready(Err(Error::PeerGone(None))),
-            Poll::Pending => Poll::Pending,
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match ready!(self.rx.poll_recv(cx)) {
+            Ok(res) => Poll::Ready(res),
+            Err(_) => Poll::Ready(Err(Error::PeerGone(None))),
         }
     }
 }

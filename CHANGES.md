@@ -1,5 +1,11 @@
 # Changes
 
+## [0.3.1] - 2022-01-10
+
+* Simplify connector type, drop .boxed_connector() method
+
+* Remove openssl and rustls features
+
 ## [0.3.0] - 2021-12-30
 
 * Upgrade to ntex 0.5.0

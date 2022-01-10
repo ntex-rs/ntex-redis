@@ -64,7 +64,7 @@ pub enum CommandError {
     Error(ByteString),
 
     /// A command response parse error
-    #[display(fmt = "Command output error: {}", _0)]
+    #[display(fmt = "Command output parse error: {}", _0)]
     Output(&'static str, Response),
 
     /// Redis protocol level errors

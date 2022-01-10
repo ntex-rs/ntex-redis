@@ -1,14 +1,8 @@
 use std::future::Future;
 
 use ntex::connect::{self, Address, Connect, Connector};
-use ntex::io::{utils::Boxed, IoBoxed};
+use ntex::io::IoBoxed;
 use ntex::{service::Service, time::Seconds, util::ByteString, util::PoolId, util::PoolRef};
-
-#[cfg(feature = "openssl")]
-use ntex::connect::openssl::{self, SslConnector};
-
-#[cfg(feature = "rustls")]
-use ntex::connect::rustls::{self, ClientConfig};
 
 use super::errors::ConnectError;
 use super::{cmd, Client, SimpleClient};
@@ -27,17 +21,20 @@ where
 {
     #[allow(clippy::new_ret_no_self)]
     /// Create new redis connector
-    pub fn new(address: A) -> RedisConnector<A, Boxed<Connector<A>, Connect<A>>> {
+    pub fn new(address: A) -> RedisConnector<A, Connector<A>> {
         RedisConnector {
             address,
             passwords: Vec::new(),
-            connector: Connector::default().seal(),
+            connector: Connector::default(),
             pool: PoolId::P7.pool_ref(),
         }
     }
 }
 
-impl<A, T> RedisConnector<A, T> {
+impl<A, T> RedisConnector<A, T>
+where
+    A: Address + Clone,
+{
     /// Add redis auth password
     pub fn password<U>(mut self, password: U) -> Self
     where
@@ -58,23 +55,10 @@ impl<A, T> RedisConnector<A, T> {
     }
 
     /// Use custom connector
-    pub fn connector<Io, U>(self, connector: U) -> RedisConnector<A, Boxed<U, Connect<A>>>
+    pub fn connector<U>(self, connector: U) -> RedisConnector<A, U>
     where
-        U: Service<Connect<A>, Response = Io, Error = connect::ConnectError>,
-        IoBoxed: From<Io>,
-    {
-        RedisConnector {
-            connector: Boxed::new(connector),
-            address: self.address,
-            passwords: self.passwords,
-            pool: self.pool,
-        }
-    }
-
-    /// Use custom boxed connector
-    pub fn boxed_connector<U>(self, connector: U) -> RedisConnector<A, U>
-    where
-        U: Service<Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
+        U: Service<Connect<A>, Error = connect::ConnectError>,
+        IoBoxed: From<U::Response>,
     {
         RedisConnector {
             connector,
@@ -83,60 +67,32 @@ impl<A, T> RedisConnector<A, T> {
             pool: self.pool,
         }
     }
-
-    #[cfg(feature = "openssl")]
-    /// Use openssl connector.
-    pub fn openssl(
-        self,
-        connector: SslConnector,
-    ) -> RedisConnector<A, Boxed<openssl::Connector<A>, Connect<A>>> {
-        RedisConnector {
-            address: self.address,
-            passwords: self.passwords,
-            connector: Boxed::new(openssl::Connector::new(connector)),
-            pool: self.pool,
-        }
-    }
-
-    #[cfg(feature = "rustls")]
-    /// Use rustls connector.
-    pub fn rustls(
-        self,
-        config: ClientConfig,
-    ) -> RedisConnector<A, Boxed<rustls::Connector<A>, Connect<A>>> {
-        RedisConnector {
-            address: self.address,
-            passwords: self.passwords,
-            connector: Boxed::new(rustls::Connector::new(config)),
-            pool: self.pool,
-        }
-    }
 }
 
 impl<A, T> RedisConnector<A, T>
 where
     A: Address + Clone,
-    T: Service<Connect<A>, Response = IoBoxed, Error = connect::ConnectError>,
+    T: Service<Connect<A>, Error = connect::ConnectError>,
+    IoBoxed: From<T::Response>,
 {
-    /// Connect to redis server and create shared client
-    pub fn connect(&self) -> impl Future<Output = Result<Client, ConnectError>> {
+    fn _connect(&self) -> impl Future<Output = Result<IoBoxed, ConnectError>> {
         let pool = self.pool;
         let passwords = self.passwords.clone();
         let fut = self.connector.call(Connect::new(self.address.clone()));
 
         async move {
-            let io = fut.await?;
+            let io = IoBoxed::from(fut.await?);
             io.set_memory_pool(pool);
             io.set_disconnect_timeout(Seconds::ZERO.into());
 
-            let client = Client::new(io);
-
             if passwords.is_empty() {
-                Ok(client)
+                Ok(io)
             } else {
+                let client = SimpleClient::new(io);
+
                 for password in passwords {
                     if client.exec(cmd::Auth(password)).await? {
-                        return Ok(client);
+                        return Ok(client.into_inner());
                     }
                 }
                 Err(ConnectError::Unauthorized)
@@ -144,29 +100,15 @@ where
         }
     }
 
+    /// Connect to redis server and create shared client
+    pub fn connect(&self) -> impl Future<Output = Result<Client, ConnectError>> {
+        let fut = self._connect();
+        async move { fut.await.map(|io| Client::new(io)) }
+    }
+
     /// Connect to redis server and create simple client
     pub fn connect_simple(&self) -> impl Future<Output = Result<SimpleClient, ConnectError>> {
-        let pool = self.pool;
-        let passwords = self.passwords.clone();
-        let fut = self.connector.call(Connect::new(self.address.clone()));
-
-        async move {
-            let io = fut.await?;
-            io.set_memory_pool(pool);
-            io.set_disconnect_timeout(Seconds::ZERO.into());
-
-            let client = SimpleClient::new(io);
-
-            if passwords.is_empty() {
-                Ok(client)
-            } else {
-                for password in passwords {
-                    if client.exec(cmd::Auth(password)).await? {
-                        return Ok(client);
-                    }
-                }
-                Err(ConnectError::Unauthorized)
-            }
-        }
+        let fut = self._connect();
+        async move { fut.await.map(|io| SimpleClient::new(io)) }
     }
 }
