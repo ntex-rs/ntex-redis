@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.2] - 2022-05-xx
+
+* Add Clone trait impl to CommandError
+
 ## [0.3.1] - 2022-01-10
 
 * Simplify connector type, drop .boxed_connector() method

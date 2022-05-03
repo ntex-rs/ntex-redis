@@ -57,7 +57,7 @@ pub enum ConnectError {
 
 impl std::error::Error for ConnectError {}
 
-#[derive(Debug, Display, From)]
+#[derive(Debug, Display, From, Clone)]
 /// Redis command execution errors
 pub enum CommandError {
     /// A redis server error response
