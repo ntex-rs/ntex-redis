@@ -34,10 +34,10 @@ impl Encoder for Codec {
                 write_rn(buf);
             }
             Request::BulkInteger(i) => {
-                let mut len_buf = [0; 32];
-                let size = itoa::write(&mut len_buf[..], i).unwrap();
-                write_header(b'$', size as i64, buf, size + 2);
-                buf.extend_from_slice(&len_buf[..size]);
+                let mut buffer = itoa::Buffer::new();
+                let rendered = buffer.format(i);
+                write_header(b'$', rendered.len() as i64, buf, rendered.len() + 2);
+                buf.extend_from_slice(rendered.as_bytes());
                 write_rn(buf);
             }
             Request::String(ref string) => {
@@ -533,11 +533,11 @@ fn write_rn(buf: &mut BytesMut) {
 }
 
 fn write_header(symb: u8, len: i64, buf: &mut BytesMut, body_size: usize) {
-    let mut len_buf = [0; 32];
-    let size = itoa::write(&mut len_buf[..], len).unwrap();
-    buf.reserve(3 + size + body_size);
+    let mut len_buf = itoa::Buffer::new();
+    let rendered = len_buf.format(len);
+    buf.reserve(3 + rendered.len() + body_size);
     buf.put_u8(symb);
-    buf.extend_from_slice(&len_buf[..size]);
+    buf.extend_from_slice(rendered.as_bytes());
     write_rn(buf);
 }
 
