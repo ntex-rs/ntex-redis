@@ -44,13 +44,15 @@ impl From<Either<Error, io::Error>> for Error {
     }
 }
 
-#[derive(Debug, Display, From)]
+#[derive(Debug, Display, From, Clone)]
 /// Redis connectivity errors
 pub enum ConnectError {
     /// Auth command failed
     Unauthorized,
+
     /// Command execution error
     Command(CommandError),
+
     /// Io connectivity error
     Connect(connect::ConnectError),
 }

@@ -1,6 +1,9 @@
+use std::convert::{TryFrom, TryInto};
+
+use ntex::util::ByteString;
+
 use super::{utils, Command, CommandError};
 use crate::codec::{BulkString, Request, Response};
-use std::convert::TryFrom;
 
 /// DEL redis command
 ///
@@ -181,5 +184,59 @@ impl Command for TtlCommand {
             -2 => TtlResult::NotFound,
             s => TtlResult::Seconds(s),
         })
+    }
+}
+
+/// KEYS redis command
+///
+/// Returns all keys matching pattern.
+///
+/// ```rust
+/// use ntex_redis::{cmd, RedisConnector};
+/// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
+/// # fn gen_random_key() -> String {
+/// #    thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
+/// # }
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
+///
+///     // set keys
+///     redis.exec(cmd::Set("firstname", "Jack")).await?;
+///     redis.exec(cmd::Set("lastname", "Stuntman")).await?;
+///
+///     // get keys
+///     let mut keys = redis.exec(cmd::Keys("*name*")).await?;
+///     # keys.sort();
+///
+///     assert_eq!(&keys[..], &["firstname", "lastname"][..]);
+///     Ok(())
+/// }
+/// ```
+pub fn Keys<T>(key: T) -> KeysPatternCommand
+where
+    BulkString: From<T>,
+{
+    KeysPatternCommand(Request::Array(vec![
+        Request::from_static("KEYS"),
+        Request::BulkString(key.into()),
+    ]))
+}
+
+pub struct KeysPatternCommand(Request);
+
+impl Command for KeysPatternCommand {
+    type Output = Vec<ByteString>;
+
+    fn to_request(self) -> Request {
+        self.0
+    }
+
+    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
+        match val.try_into() {
+            Ok(val) => Ok(val),
+            Err((_, val)) => Err(CommandError::Output("Cannot parse response", val)),
+        }
     }
 }

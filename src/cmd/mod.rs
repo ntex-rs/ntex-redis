@@ -15,7 +15,7 @@ mod utils;
 pub use self::auth::Auth;
 pub use self::connection::{Ping, Select};
 pub use self::hashes::{HDel, HGet, HGetAll, HIncrBy, HLen, HSet};
-pub use self::keys::{Del, Exists, Expire, ExpireAt, Ttl, TtlResult};
+pub use self::keys::{Del, Exists, Expire, ExpireAt, Keys, Ttl, TtlResult};
 pub use self::lists::{LIndex, LPop, LPush, RPop, RPush};
 pub use self::strings::{Get, IncrBy, Set};
 
@@ -35,7 +35,7 @@ pub mod commands {
     //! Command implementations
     pub use super::auth::AuthCommand;
     pub use super::hashes::{HDelCommand, HGetAllCommand, HSetCommand};
-    pub use super::keys::{KeysCommand, TtlCommand};
+    pub use super::keys::{KeysCommand, KeysPatternCommand, TtlCommand};
     pub use super::lists::LPushCommand;
     pub use super::strings::SetCommand;
     pub use super::utils::{BulkOutputCommand, IntOutputCommand};

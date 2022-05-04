@@ -1,6 +1,8 @@
 # Changes
 
-## [0.3.2] - 2022-05-xx
+## [0.3.2] - 2022-05-04
+
+* Add `Keys` command #4
 
 * Add Clone trait impl to CommandError
 
