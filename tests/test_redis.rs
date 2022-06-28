@@ -1,4 +1,5 @@
-use ntex::util::HashMap;
+use futures_util::StreamExt;
+use ntex::util::{Bytes, HashMap};
 use ntex_redis::{cmd, Client, RedisConnector};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::time::{Duration, SystemTime};
@@ -199,4 +200,31 @@ async fn test_connection() {
 
     let result = redis.exec(cmd::Select(1)).await.unwrap();
     assert!(result);
+}
+
+#[ntex::test]
+async fn test_pubsub() {
+    let key = new_key();
+
+    let subscriber = RedisConnector::new("127.0.0.1:6379")
+        .connect_simple()
+        .await
+        .unwrap();
+
+    let mut stream = subscriber.stream(cmd::Subscribe(&key)).unwrap();
+    let message = stream.next().await;
+    assert_eq!(message.unwrap().unwrap(), cmd::SubscribeItem::Subscribed);
+
+    let publisher = connect().await;
+
+    // pub
+    let result = publisher.exec(cmd::Publish(&key, "1")).await.unwrap();
+    assert_eq!(result, 1);
+
+    // sub
+    let message = stream.next().await;
+    assert_eq!(
+        message.unwrap().unwrap(),
+        cmd::SubscribeItem::Message(Bytes::from_static(b"1"))
+    );
 }
