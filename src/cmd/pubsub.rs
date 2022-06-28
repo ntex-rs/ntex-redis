@@ -1,5 +1,6 @@
 use super::{utils, Command, CommandError};
 use ntex::util::Bytes;
+use std::convert::TryFrom;
 
 use crate::codec::{BulkString, Request, Response};
 
@@ -24,6 +25,56 @@ pub enum SubscribeItem {
     Message(Bytes),
 }
 
+impl TryFrom<Response> for SubscribeItem {
+    type Error = CommandError;
+
+    fn try_from(val: Response) -> Result<Self, Self::Error> {
+        let parts = if let Response::Array(ref parts) = val {
+            parts
+        } else {
+            return Err(CommandError::Output("Cannot parse response", val));
+        };
+
+        if parts.len() != 3 {
+            return Err(CommandError::Output(
+                "Subscription message has invalid items number",
+                val,
+            ));
+        }
+
+        let (mtype, payload) = (&parts[0], &parts[2]);
+
+        let mtype = if let Response::Bytes(mtype) = mtype {
+            mtype
+        } else {
+            return Err(CommandError::Output(
+                "Subscription message type unknown",
+                val,
+            ));
+        };
+
+        if mtype == &TYPE_SUBSCRIBE {
+            return Ok(SubscribeItem::Subscribed);
+        }
+
+        if mtype != &TYPE_MESSAGE {
+            return Err(CommandError::Output(
+                "Subscription message type unknown",
+                val,
+            ));
+        }
+
+        if let Response::Bytes(payload) = payload {
+            return Ok(SubscribeItem::Message(payload.clone()));
+        } else {
+            return Err(CommandError::Output(
+                "Subscription message has empty payload",
+                val,
+            ));
+        }
+    }
+}
+
 pub struct SubscribeOutputCommand(pub(crate) Request);
 
 impl Command for SubscribeOutputCommand {
@@ -34,30 +85,7 @@ impl Command for SubscribeOutputCommand {
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::Array(ref v) => match v.get(0) {
-                Some(Response::Bytes(t)) => {
-                    if t == &TYPE_SUBSCRIBE {
-                        return Ok(SubscribeItem::Subscribed);
-                    }
-                    if t == &TYPE_MESSAGE {
-                        return match v.get(2) {
-                            Some(payload) => match payload {
-                                Response::Bytes(m) => Ok(SubscribeItem::Message(m.clone())),
-                                _ => {
-                                    Err(CommandError::Output("Cannot parse message payload", val))
-                                }
-                            },
-                            _ => Err(CommandError::Output("Empty messsage payload", val)),
-                        };
-                    }
-
-                    Err(CommandError::Output("Unknown message type", val))
-                }
-                _ => Err(CommandError::Output("Cannot parse message type", val)),
-            },
-            _ => Err(CommandError::Output("Cannot parse response", val)),
-        }
+        SubscribeItem::try_from(val)
     }
 }
 

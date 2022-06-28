@@ -1,4 +1,3 @@
-use futures_util::StreamExt;
 use ntex::util::{Bytes, HashMap};
 use ntex_redis::{cmd, Client, RedisConnector};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
@@ -211,8 +210,8 @@ async fn test_pubsub() {
         .await
         .unwrap();
 
-    let mut stream = subscriber.stream(cmd::Subscribe(&key)).unwrap();
-    let message = stream.next().await;
+    let stream = subscriber.stream(cmd::Subscribe(&key)).unwrap();
+    let message = stream.recv().await;
     assert_eq!(message.unwrap().unwrap(), cmd::SubscribeItem::Subscribed);
 
     let publisher = connect().await;
@@ -222,7 +221,7 @@ async fn test_pubsub() {
     assert_eq!(result, 1);
 
     // sub
-    let message = stream.next().await;
+    let message = stream.recv().await;
     assert_eq!(
         message.unwrap().unwrap(),
         cmd::SubscribeItem::Message(Bytes::from_static(b"1"))

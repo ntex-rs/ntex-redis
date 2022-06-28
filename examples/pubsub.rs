@@ -1,4 +1,3 @@
-use futures_util::StreamExt;
 use ntex_redis::{cmd, RedisConnector};
 use std::error::Error;
 
@@ -10,11 +9,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let client = RedisConnector::new("127.0.0.1:6379")
         .connect_simple()
         .await?;
-    let mut subscriber = client.stream(cmd::Subscribe("pubsub"))?;
+    let subscriber = client.stream(cmd::Subscribe("pubsub"))?;
 
     ntex::rt::spawn(async move {
         loop {
-            match subscriber.next().await {
+            match subscriber.recv().await {
                 Some(Ok(cmd::SubscribeItem::Subscribed)) => println!("sub: subscribed"),
                 Some(Ok(cmd::SubscribeItem::Message(payload))) => {
                     println!("sub: {:?}", payload)

@@ -47,21 +47,16 @@ impl SimpleClient {
     }
 
     /// Execute redis command and stream response
-    pub fn stream<U>(
-        self,
-        cmd: U,
-    ) -> Result<impl Stream<Item = Result<U::Output, CommandError>>, CommandError>
+    pub fn stream<U>(self, cmd: U) -> Result<RedisStream<U>, CommandError>
     where
         U: Command,
     {
         self.io.encode(cmd.to_request(), &Codec)?;
 
-        let rs: RedisStream<U> = RedisStream {
+        Ok(RedisStream {
             io: self.io,
             _cmd: std::marker::PhantomData,
-        };
-
-        Ok(rs)
+        })
     }
 
     pub(crate) fn into_inner(self) -> IoBoxed {
@@ -78,6 +73,23 @@ impl<U: Command> Stream for RedisStream<U> {
     type Item = Result<U::Output, CommandError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.poll_recv(cx)
+    }
+}
+
+impl<U: Command> RedisStream<U> {
+    /// Attempt to pull out the next value of this stream.
+    pub async fn recv(&self) -> Option<Result<U::Output, CommandError>> {
+        poll_fn(|cx| self.poll_recv(cx)).await
+    }
+
+    /// Attempt to pull out the next value of this stream, registering
+    /// the current task for wakeup if the value is not yet available,
+    /// and returning None if the payload is exhausted.
+    pub fn poll_recv(
+        &self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<U::Output, CommandError>>> {
         match ready!(self.io.poll_recv(&Codec, cx)) {
             Ok(item) => match item.into_result() {
                 Ok(result) => Poll::Ready(Some(U::to_output(result))),
