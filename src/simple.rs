@@ -93,7 +93,7 @@ impl<'a, U: Command> Stream for OutputStream<'a, U> {
     type Item = Result<U::Output, CommandError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.client.poll_recv::<U>(cx)
+        self.poll_recv(cx)
     }
 }
 
