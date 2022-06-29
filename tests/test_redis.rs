@@ -242,4 +242,8 @@ async fn test_pubsub() {
         message.unwrap().unwrap(),
         cmd::SubscribeItem::UnSubscribed(channel.clone())
     );
+
+    // back to client state
+    let client = pubsub.into_client();
+    client.exec(cmd::Reset()).await.unwrap();
 }

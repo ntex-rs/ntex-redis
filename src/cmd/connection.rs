@@ -88,3 +88,42 @@ impl Command for PingCommand {
         }
     }
 }
+
+/// RESET redis command
+/// This command performs a full reset of the connection's server-side context, mimicking the effect of disconnecting and reconnecting again.
+///
+/// ```rust
+/// use ntex_redis::{cmd, RedisConnector};
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect_simple().await?;
+///
+///     // reset connection
+///     let response = redis.exec(cmd::Reset()).await?;
+///
+///     assert_eq!(&response, "RESET");
+///
+///     Ok(())
+/// }
+/// ```
+pub fn Reset() -> ResetCommand {
+    ResetCommand(Request::Array(vec![Request::from_static("RESET")]))
+}
+pub struct ResetCommand(Request);
+
+impl Command for ResetCommand {
+    type Output = ByteString;
+
+    fn to_request(self) -> Request {
+        self.0
+    }
+
+    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
+        match val {
+            Response::String(val) => Ok(val),
+            Response::Error(val) => Err(CommandError::Error(val)),
+            _ => Err(CommandError::Output("Unknown response", val)),
+        }
+    }
+}

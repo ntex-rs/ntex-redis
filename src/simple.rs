@@ -1,7 +1,10 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use super::cmd::{Command, PubSubCommand, SubscribeOutputCommand};
+use super::cmd::{
+    commands::{PubSubCommand, SubscribeOutputCommand},
+    Command,
+};
 use super::codec::Codec;
 use super::errors::{CommandError, Error};
 use ntex::{io::IoBoxed, io::RecvError, util::poll_fn, util::ready, util::Stream};
@@ -99,7 +102,29 @@ impl<U: Command + PubSubCommand> Stream for SubscriptionClient<U> {
 }
 
 impl<U: Command + PubSubCommand> SubscriptionClient<U> {
-    /// Get client back. Be sure to all pubsub messages from redis are received!
+    /// Get client back. Don't forget reset connection!
+    ///
+    /// ```rust
+    /// use ntex_redis::{cmd, RedisConnector};
+    ///
+    /// #[ntex::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let redis = RedisConnector::new("127.0.0.1:6379").connect_simple().await?;
+    ///    
+    ///     let subscriber = redis.subscribe(cmd::Subscribe("test"))?;
+    ///     // do some work
+    ///
+    ///     // go back to normal client
+    ///     let redis = subscriber.into_client();
+    ///
+    ///     // and reset connection, client may receive pending subscription messages instead of valid RESET response
+    ///     if let Err(e) = redis.exec(cmd::Reset()).await {
+    ///         println!("Error on reset connection: {}", e);      
+    ///     };
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn into_client(self) -> SimpleClient {
         self.client
     }
