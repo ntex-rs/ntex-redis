@@ -5,6 +5,7 @@ use std::convert::TryFrom;
 use crate::codec::{BulkString, Request, Response};
 
 const TYPE_SUBSCRIBE: Bytes = Bytes::from_static(b"subscribe");
+const TYPE_UNSUBSCRIBE: Bytes = Bytes::from_static(b"unsubscribe");
 const TYPE_MESSAGE: Bytes = Bytes::from_static(b"message");
 
 /// Publish redis command
@@ -22,6 +23,7 @@ where
 #[derive(Debug, PartialEq)]
 pub enum SubscribeItem {
     Subscribed,
+    UnSubscribed,
     Message(Bytes),
 }
 
@@ -55,6 +57,10 @@ impl TryFrom<Response> for SubscribeItem {
 
         if mtype == &TYPE_SUBSCRIBE {
             return Ok(SubscribeItem::Subscribed);
+        }
+
+        if mtype == &TYPE_UNSUBSCRIBE {
+            return Ok(SubscribeItem::UnSubscribed);
         }
 
         if mtype != &TYPE_MESSAGE {
@@ -96,6 +102,17 @@ where
 {
     SubscribeOutputCommand(Request::Array(vec![
         Request::from_static("SUBSCRIBE"),
+        Request::BulkString(key.into()),
+    ]))
+}
+
+/// Unsubscribe redis command
+pub fn UnSubscribe<T>(key: T) -> SubscribeOutputCommand
+where
+    BulkString: From<T>,
+{
+    SubscribeOutputCommand(Request::Array(vec![
+        Request::from_static("UNSUBSCRIBE"),
         Request::BulkString(key.into()),
     ]))
 }

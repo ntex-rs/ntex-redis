@@ -211,6 +211,7 @@ async fn test_pubsub() {
         .unwrap();
 
     let stream = subscriber.stream(cmd::Subscribe(&key)).unwrap();
+
     let message = stream.recv().await;
     assert_eq!(message.unwrap().unwrap(), cmd::SubscribeItem::Subscribed);
 
@@ -226,4 +227,10 @@ async fn test_pubsub() {
         message.unwrap().unwrap(),
         cmd::SubscribeItem::Message(Bytes::from_static(b"1"))
     );
+
+    // unsub
+    subscriber.send(cmd::UnSubscribe(&key)).unwrap();
+
+    let message = stream.recv().await;
+    assert_eq!(message.unwrap().unwrap(), cmd::SubscribeItem::UnSubscribed);
 }

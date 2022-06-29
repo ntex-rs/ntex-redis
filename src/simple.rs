@@ -17,44 +17,32 @@ impl SimpleClient {
         SimpleClient { io }
     }
 
-    /// Execute redis command
+    /// Execute redis command and wait result
     pub async fn exec<U>(&self, cmd: U) -> Result<U::Output, CommandError>
     where
         U: Command,
     {
-        self.io.encode(cmd.to_request(), &Codec)?;
-
-        poll_fn(|cx| loop {
-            return match ready!(self.io.poll_recv(&Codec, cx)) {
-                Ok(item) => Poll::Ready(U::to_output(
-                    item.into_result().map_err(CommandError::Error)?,
-                )),
-                Err(RecvError::KeepAlive) | Err(RecvError::Stop) => {
-                    unreachable!()
-                }
-                Err(RecvError::WriteBackpressure) => {
-                    ready!(self.io.poll_flush(cx, false))
-                        .map_err(|e| CommandError::Protocol(Error::PeerGone(Some(e))))?;
-                    continue;
-                }
-                Err(RecvError::Decoder(err)) => Poll::Ready(Err(CommandError::Protocol(err))),
-                Err(RecvError::PeerGone(err)) => {
-                    Poll::Ready(Err(CommandError::Protocol(Error::PeerGone(err))))
-                }
-            };
-        })
-        .await
+        self.send(cmd)?;
+        self.recv::<U>().await.unwrap()
     }
 
-    /// Execute redis command and stream response
-    pub fn stream<U>(self, cmd: U) -> Result<RedisStream<U>, CommandError>
+    /// Send redis command
+    pub fn send<U>(&self, cmd: U) -> Result<(), CommandError>
     where
         U: Command,
     {
         self.io.encode(cmd.to_request(), &Codec)?;
+        Ok(())
+    }
 
-        Ok(RedisStream {
-            io: self.io,
+    /// Execute redis command and act with output as stream
+    pub fn stream<U>(&self, cmd: U) -> Result<OutputStream<U>, CommandError>
+    where
+        U: Command,
+    {
+        self.send(cmd)?;
+        Ok(OutputStream {
+            client: self,
             _cmd: std::marker::PhantomData,
         })
     }
@@ -62,31 +50,12 @@ impl SimpleClient {
     pub(crate) fn into_inner(self) -> IoBoxed {
         self.io
     }
-}
 
-pub struct RedisStream<U: Command> {
-    io: IoBoxed,
-    _cmd: std::marker::PhantomData<U>,
-}
-
-impl<U: Command> Stream for RedisStream<U> {
-    type Item = Result<U::Output, CommandError>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.poll_recv(cx)
-    }
-}
-
-impl<U: Command> RedisStream<U> {
-    /// Attempt to pull out the next value of this stream.
-    pub async fn recv(&self) -> Option<Result<U::Output, CommandError>> {
-        poll_fn(|cx| self.poll_recv(cx)).await
+    async fn recv<U: Command>(&self) -> Option<Result<U::Output, CommandError>> {
+        poll_fn(|cx| self.poll_recv::<U>(cx)).await
     }
 
-    /// Attempt to pull out the next value of this stream, registering
-    /// the current task for wakeup if the value is not yet available,
-    /// and returning None if the payload is exhausted.
-    pub fn poll_recv(
+    fn poll_recv<U: Command>(
         &self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<U::Output, CommandError>>> {
@@ -112,5 +81,35 @@ impl<U: Command> RedisStream<U> {
                 Poll::Ready(Some(Err(CommandError::Protocol(Error::PeerGone(err)))))
             }
         }
+    }
+}
+
+pub struct OutputStream<'a, U> {
+    client: &'a SimpleClient,
+    _cmd: std::marker::PhantomData<U>,
+}
+
+impl<'a, U: Command> Stream for OutputStream<'a, U> {
+    type Item = Result<U::Output, CommandError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.client.poll_recv::<U>(cx)
+    }
+}
+
+impl<'a, U: Command> OutputStream<'a, U> {
+    /// Attempt to pull out the next value of this stream.
+    pub async fn recv(&self) -> Option<Result<U::Output, CommandError>> {
+        poll_fn(|cx| self.client.poll_recv::<U>(cx)).await
+    }
+
+    /// Attempt to pull out the next value of this stream, registering
+    /// the current task for wakeup if the value is not yet available,
+    /// and returning None if the payload is exhausted.
+    pub fn poll_recv(
+        &self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<U::Output, CommandError>>> {
+        self.client.poll_recv::<U>(cx)
     }
 }

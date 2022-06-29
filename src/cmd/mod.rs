@@ -18,7 +18,7 @@ pub use self::connection::{Ping, Select};
 pub use self::hashes::{HDel, HGet, HGetAll, HIncrBy, HLen, HSet};
 pub use self::keys::{Del, Exists, Expire, ExpireAt, Keys, Ttl, TtlResult};
 pub use self::lists::{LIndex, LPop, LPush, RPop, RPush};
-pub use self::pubsub::{Publish, Subscribe, SubscribeItem};
+pub use self::pubsub::{Publish, Subscribe, SubscribeItem, UnSubscribe};
 pub use self::strings::{Get, IncrBy, Set};
 
 /// Trait implemented by types that can be used as redis commands
