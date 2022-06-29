@@ -20,11 +20,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         loop {
             match subscriber.recv().await {
-                Some(Ok(cmd::SubscribeItem::Subscribed)) => println!("sub: subscribed"),
-                Some(Ok(cmd::SubscribeItem::Message(payload))) => {
-                    println!("sub: {:?}", payload)
+                Some(Ok(cmd::SubscribeItem::Subscribed(channel))) => {
+                    println!("sub: subscribed to {:?}", channel)
                 }
-                Some(Ok(cmd::SubscribeItem::UnSubscribed)) => println!("sub: unsubscribed"),
+                Some(Ok(cmd::SubscribeItem::Message { channel, payload })) => {
+                    println!("sub: {:?} from {:?}", payload, channel)
+                }
+                Some(Ok(cmd::SubscribeItem::UnSubscribed(channel))) => {
+                    println!("sub: unsubscribed from {:?}", channel)
+                }
                 Some(Err(e)) => {
                     println!("sub: {}", e);
                     return;

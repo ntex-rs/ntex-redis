@@ -204,33 +204,43 @@ async fn test_connection() {
 #[ntex::test]
 async fn test_pubsub() {
     let key = new_key();
+    let channel = Bytes::from(key);
 
     let subscriber = RedisConnector::new("127.0.0.1:6379")
         .connect_simple()
         .await
         .unwrap();
 
-    let stream = subscriber.stream(cmd::Subscribe(&key)).unwrap();
+    let stream = subscriber.stream(cmd::Subscribe(&channel)).unwrap();
 
     let message = stream.recv().await;
-    assert_eq!(message.unwrap().unwrap(), cmd::SubscribeItem::Subscribed);
+    assert_eq!(
+        message.unwrap().unwrap(),
+        cmd::SubscribeItem::Subscribed(channel.clone())
+    );
 
     let publisher = connect().await;
 
     // pub
-    let result = publisher.exec(cmd::Publish(&key, "1")).await.unwrap();
+    let result = publisher.exec(cmd::Publish(&channel, "1")).await.unwrap();
     assert_eq!(result, 1);
 
     // sub
     let message = stream.recv().await;
     assert_eq!(
         message.unwrap().unwrap(),
-        cmd::SubscribeItem::Message(Bytes::from_static(b"1"))
+        cmd::SubscribeItem::Message {
+            channel: channel.clone(),
+            payload: Bytes::from_static(b"1")
+        }
     );
 
     // unsub
-    subscriber.send(cmd::UnSubscribe(&key)).unwrap();
+    subscriber.send(cmd::UnSubscribe(&channel)).unwrap();
 
     let message = stream.recv().await;
-    assert_eq!(message.unwrap().unwrap(), cmd::SubscribeItem::UnSubscribed);
+    assert_eq!(
+        message.unwrap().unwrap(),
+        cmd::SubscribeItem::UnSubscribed(channel.clone())
+    );
 }
