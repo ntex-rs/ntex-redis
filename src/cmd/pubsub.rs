@@ -8,6 +8,8 @@ const TYPE_SUBSCRIBE: Bytes = Bytes::from_static(b"subscribe");
 const TYPE_UNSUBSCRIBE: Bytes = Bytes::from_static(b"unsubscribe");
 const TYPE_MESSAGE: Bytes = Bytes::from_static(b"message");
 
+pub trait PubSubCommand {}
+
 #[derive(Debug, PartialEq)]
 pub enum SubscribeItem {
     Subscribed(Bytes),
@@ -77,6 +79,20 @@ impl Command for SubscribeOutputCommand {
     }
 }
 
+pub struct UnSubscribeOutputCommand(pub(crate) Request);
+
+impl Command for UnSubscribeOutputCommand {
+    type Output = SubscribeItem;
+
+    fn to_request(self) -> Request {
+        self.0
+    }
+
+    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
+        SubscribeItem::try_from(val)
+    }
+}
+
 /// Publish redis command
 pub fn Publish<T, V>(key: T, value: V) -> utils::IntOutputCommand
 where
@@ -101,12 +117,15 @@ where
 }
 
 /// Unsubscribe redis command
-pub fn UnSubscribe<T>(key: T) -> SubscribeOutputCommand
+pub fn UnSubscribe<T>(key: T) -> UnSubscribeOutputCommand
 where
     BulkString: From<T>,
 {
-    SubscribeOutputCommand(Request::Array(vec![
+    UnSubscribeOutputCommand(Request::Array(vec![
         Request::from_static("UNSUBSCRIBE"),
         Request::BulkString(key.into()),
     ]))
 }
+
+impl PubSubCommand for SubscribeOutputCommand {}
+impl PubSubCommand for UnSubscribeOutputCommand {}

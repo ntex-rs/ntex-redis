@@ -1,7 +1,7 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use super::cmd::Command;
+use super::cmd::{Command, PubSubCommand, SubscribeOutputCommand};
 use super::codec::Codec;
 use super::errors::{CommandError, Error};
 use ntex::{io::IoBoxed, io::RecvError, util::poll_fn, util::ready, util::Stream};
@@ -35,13 +35,13 @@ impl SimpleClient {
         Ok(())
     }
 
-    /// Execute redis command and act with output as stream
-    pub fn stream<U>(&self, cmd: U) -> Result<OutputStream<U>, CommandError>
-    where
-        U: Command,
-    {
+    /// Execute redis SUBSCRIBE command and act with output as stream
+    pub fn subscribe(
+        self,
+        cmd: SubscribeOutputCommand,
+    ) -> Result<SubscriptionClient<SubscribeOutputCommand>, CommandError> {
         self.send(cmd)?;
-        Ok(OutputStream {
+        Ok(SubscriptionClient {
             client: self,
             _cmd: std::marker::PhantomData,
         })
@@ -84,12 +84,13 @@ impl SimpleClient {
     }
 }
 
-pub struct OutputStream<'a, U> {
-    client: &'a SimpleClient,
+/// Redis pubsub client to receive push messages
+pub struct SubscriptionClient<U: Command + PubSubCommand> {
+    client: SimpleClient,
     _cmd: std::marker::PhantomData<U>,
 }
 
-impl<'a, U: Command> Stream for OutputStream<'a, U> {
+impl<U: Command + PubSubCommand> Stream for SubscriptionClient<U> {
     type Item = Result<U::Output, CommandError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -97,7 +98,17 @@ impl<'a, U: Command> Stream for OutputStream<'a, U> {
     }
 }
 
-impl<'a, U: Command> OutputStream<'a, U> {
+impl<U: Command + PubSubCommand> SubscriptionClient<U> {
+    /// Get client back. Be sure to all pubsub messages from redis are received!
+    pub fn into_client(self) -> SimpleClient {
+        self.client
+    }
+
+    /// Send redis subscribe/unsubscribe command
+    pub fn send<T: Command + PubSubCommand>(&self, cmd: T) -> Result<(), CommandError> {
+        self.client.send(cmd)
+    }
+
     /// Attempt to pull out the next value of this stream.
     pub async fn recv(&self) -> Option<Result<U::Output, CommandError>> {
         poll_fn(|cx| self.client.poll_recv::<U>(cx)).await

@@ -211,9 +211,9 @@ async fn test_pubsub() {
         .await
         .unwrap();
 
-    let stream = subscriber.stream(cmd::Subscribe(&channel)).unwrap();
-
-    let message = stream.recv().await;
+    // sub
+    let pubsub = subscriber.subscribe(cmd::Subscribe(&channel)).unwrap();
+    let message = pubsub.recv().await;
     assert_eq!(
         message.unwrap().unwrap(),
         cmd::SubscribeItem::Subscribed(channel.clone())
@@ -225,8 +225,8 @@ async fn test_pubsub() {
     let result = publisher.exec(cmd::Publish(&channel, "1")).await.unwrap();
     assert_eq!(result, 1);
 
-    // sub
-    let message = stream.recv().await;
+    // receive message
+    let message = pubsub.recv().await;
     assert_eq!(
         message.unwrap().unwrap(),
         cmd::SubscribeItem::Message {
@@ -236,9 +236,8 @@ async fn test_pubsub() {
     );
 
     // unsub
-    subscriber.send(cmd::UnSubscribe(&channel)).unwrap();
-
-    let message = stream.recv().await;
+    pubsub.send(cmd::UnSubscribe(&channel)).unwrap();
+    let message = pubsub.recv().await;
     assert_eq!(
         message.unwrap().unwrap(),
         cmd::SubscribeItem::UnSubscribed(channel.clone())
