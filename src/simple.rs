@@ -26,7 +26,11 @@ impl SimpleClient {
         U: Command,
     {
         self.send(cmd)?;
-        self.recv::<U>().await.unwrap()
+        loop {
+            if let Some(result) = self.recv::<U>().await {
+                return result;
+            }
+        }
     }
 
     /// Send redis command

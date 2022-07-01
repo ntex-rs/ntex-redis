@@ -97,7 +97,7 @@ impl Command for PingCommand {
 ///
 /// #[ntex::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let redis = RedisConnector::new("127.0.0.1:6379").connect_simple().await?;
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
 ///
 ///     // reset connection
 ///     let response = redis.exec(cmd::Reset()).await?;
