@@ -5,12 +5,14 @@ use std::error::Error;
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
+    let channel = "pubsub_channel";
+
     // subscriber
     let client = RedisConnector::new("127.0.0.1:6379")
         .connect_simple()
         .await?;
 
-    let pubsub = client.subscribe(cmd::Subscribe("pubsub")).unwrap();
+    let pubsub = client.subscribe(cmd::Subscribe(vec![channel])).unwrap();
 
     ntex::rt::spawn(async move {
         loop {
@@ -18,7 +20,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 Some(Ok(cmd::SubscribeItem::Subscribed(channel))) => {
                     println!("sub: subscribed to {:?}", channel)
                 }
-                Some(Ok(cmd::SubscribeItem::Message { channel, payload })) => {
+                Some(Ok(cmd::SubscribeItem::Message {
+                    pattern: _,
+                    channel,
+                    payload,
+                })) => {
                     println!("sub: {:?} from {:?}", payload, channel)
                 }
                 Some(Ok(cmd::SubscribeItem::UnSubscribed(channel))) => {
@@ -39,7 +45,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for i in 0..5 {
         let value = i.to_string();
         println!("pub: {}", value);
-        redis.exec(cmd::Publish("pubsub", &value)).await?;
+        redis.exec(cmd::Publish(channel, &value)).await?;
     }
 
     Ok(())

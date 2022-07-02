@@ -115,7 +115,7 @@ impl<U: Command + PubSubCommand> SubscriptionClient<U> {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let redis = RedisConnector::new("127.0.0.1:6379").connect_simple().await?;
     ///    
-    ///     let subscriber = redis.subscribe(cmd::Subscribe("test"))?;
+    ///     let subscriber = redis.subscribe(cmd::Subscribe(vec!["test"]))?;
     ///     // do some work
     ///
     ///     // go back to normal client
