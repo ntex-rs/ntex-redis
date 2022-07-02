@@ -85,34 +85,30 @@ impl TryFrom<Response> for SubscribeItem {
 
         match &mtype {
             s if s == &TYPE_SUBSCRIBE || s == &TYPE_SSUBSCRIBE || s == &TYPE_PSUBSCRIBE => {
-                return Ok(SubscribeItem::Subscribed(channel));
+                Ok(SubscribeItem::Subscribed(channel))
             }
             s if s == &TYPE_UNSUBSCRIBE || s == &TYPE_SUNSUBSCRIBE || s == &TYPE_PUNSUBSCRIBE => {
-                return Ok(SubscribeItem::UnSubscribed(channel));
+                Ok(SubscribeItem::UnSubscribed(channel))
             }
             s if s == &TYPE_MESSAGE || s == &TYPE_SMESSAGE || s == &TYPE_PMESSAGE => {
-                let payload = if let Some(payload) = payload.0.left() {
-                    payload
+                if let Some(payload) = payload.0.left() {
+                    Ok(SubscribeItem::Message {
+                        pattern,
+                        channel,
+                        payload,
+                    })
                 } else {
-                    return Err(CommandError::Output(
+                    Err(CommandError::Output(
                         "Subscription message payload is not bytes",
                         Response::Nil,
-                    ));
-                };
-
-                return Ok(SubscribeItem::Message {
-                    pattern,
-                    channel,
-                    payload,
-                });
+                    ))
+                }
             }
-            _ => {
-                return Err(CommandError::Output(
-                    "Subscription message type unknown",
-                    Response::Bytes(mtype),
-                ));
-            }
-        };
+            _ => Err(CommandError::Output(
+                "Subscription message type unknown",
+                Response::Bytes(mtype),
+            )),
+        }
     }
 }
 
