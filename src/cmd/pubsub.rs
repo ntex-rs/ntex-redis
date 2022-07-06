@@ -16,12 +16,6 @@ const TYPE_PMESSAGE: Bytes = Bytes::from_static(b"pmessage");
 
 pub trait PubSubCommand {}
 
-// #[derive(Debug, PartialEq)]
-// pub struct Channel {
-//     pub name: Bytes,
-//     pub pattern: Option<Bytes>,
-// }
-
 #[derive(Debug, PartialEq)]
 pub enum SubscribeItem {
     Subscribed(Bytes),
