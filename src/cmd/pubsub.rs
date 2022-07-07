@@ -16,7 +16,7 @@ const TYPE_PMESSAGE: Bytes = Bytes::from_static(b"pmessage");
 
 pub trait PubSubCommand {}
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum SubscribeItem {
     Subscribed(Bytes),
     UnSubscribed(Bytes),

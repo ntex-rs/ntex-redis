@@ -161,7 +161,7 @@ where
     ])
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum TtlResult {
     Seconds(i64),
     NoExpire,
