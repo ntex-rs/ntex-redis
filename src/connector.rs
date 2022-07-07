@@ -103,12 +103,12 @@ where
     /// Connect to redis server and create shared client
     pub fn connect(&self) -> impl Future<Output = Result<Client, ConnectError>> {
         let fut = self._connect();
-        async move { fut.await.map(|io| Client::new(io)) }
+        async move { fut.await.map(Client::new) }
     }
 
     /// Connect to redis server and create simple client
     pub fn connect_simple(&self) -> impl Future<Output = Result<SimpleClient, ConnectError>> {
         let fut = self._connect();
-        async move { fut.await.map(|io| SimpleClient::new(io)) }
+        async move { fut.await.map(SimpleClient::new) }
     }
 }

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.3] - 2022-07-07
+
+* pubsub support #5
+
 ## [0.3.2] - 2022-05-04
 
 * Add `Keys` command #4
