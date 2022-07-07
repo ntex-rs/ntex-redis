@@ -1,4 +1,4 @@
-use ntex::util::HashMap;
+use ntex::util::{Bytes, HashMap};
 use ntex_redis::{cmd, Client, RedisConnector};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::time::{Duration, SystemTime};
@@ -199,4 +199,151 @@ async fn test_connection() {
 
     let result = redis.exec(cmd::Select(1)).await.unwrap();
     assert!(result);
+}
+
+#[ntex::test]
+async fn test_subscribe() {
+    let key = new_key();
+    let channel = Bytes::from(key);
+
+    let subscriber = RedisConnector::new("127.0.0.1:6379")
+        .connect_simple()
+        .await
+        .unwrap();
+
+    // sub
+    let pubsub = subscriber
+        .subscribe(cmd::Subscribe(vec![&channel]))
+        .unwrap();
+    let message = pubsub.recv().await;
+    assert_eq!(
+        message.unwrap().unwrap(),
+        cmd::SubscribeItem::Subscribed(channel.clone())
+    );
+
+    let publisher = connect().await;
+
+    // pub
+    let result = publisher.exec(cmd::Publish(&channel, "1")).await.unwrap();
+    assert_eq!(result, 1);
+
+    // receive message
+    let message = pubsub.recv().await;
+    assert_eq!(
+        message.unwrap().unwrap(),
+        cmd::SubscribeItem::Message {
+            pattern: None,
+            channel: channel.clone(),
+            payload: Bytes::from_static(b"1")
+        }
+    );
+
+    // unsub
+    pubsub.send(cmd::UnSubscribe(Some(vec![&channel]))).unwrap();
+    let message = pubsub.recv().await;
+    assert_eq!(
+        message.unwrap().unwrap(),
+        cmd::SubscribeItem::UnSubscribed(channel.clone())
+    );
+
+    // back to client state
+    let client = pubsub.into_client();
+    client.exec(cmd::Reset()).await.unwrap();
+}
+
+#[ntex::test]
+async fn test_ssubscribe() {
+    let key = new_key();
+    let channel = Bytes::from(key);
+
+    let subscriber = RedisConnector::new("127.0.0.1:6379")
+        .connect_simple()
+        .await
+        .unwrap();
+
+    // sub
+    let pubsub = subscriber
+        .subscribe(cmd::SSubscribe(vec![&channel]))
+        .unwrap();
+    let message = pubsub.recv().await;
+    assert_eq!(
+        message.unwrap().unwrap(),
+        cmd::SubscribeItem::Subscribed(channel.clone())
+    );
+
+    let publisher = connect().await;
+
+    // pub
+    let result = publisher.exec(cmd::SPublish(&channel, "1")).await.unwrap();
+    assert_eq!(result, 1);
+
+    // receive message
+    let message = pubsub.recv().await;
+    assert_eq!(
+        message.unwrap().unwrap(),
+        cmd::SubscribeItem::Message {
+            pattern: None,
+            channel: channel.clone(),
+            payload: Bytes::from_static(b"1")
+        }
+    );
+
+    // unsub
+    pubsub
+        .send(cmd::SUnSubscribe(Some(vec![&channel])))
+        .unwrap();
+    let message = pubsub.recv().await;
+    assert_eq!(
+        message.unwrap().unwrap(),
+        cmd::SubscribeItem::UnSubscribed(channel.clone())
+    );
+}
+
+#[ntex::test]
+async fn test_psubscribe() {
+    let part = new_key();
+    let channel = Bytes::from(format!("channel:{}", part));
+    let pattern = Bytes::from("channel:*");
+
+    let subscriber = RedisConnector::new("127.0.0.1:6379")
+        .connect_simple()
+        .await
+        .unwrap();
+
+    // sub
+    let pubsub = subscriber
+        .subscribe(cmd::PSubscribe(vec![&pattern]))
+        .unwrap();
+    let message = pubsub.recv().await;
+    assert_eq!(
+        message.unwrap().unwrap(),
+        cmd::SubscribeItem::Subscribed(pattern.clone()),
+    );
+
+    let publisher = connect().await;
+
+    // pub
+    let result = publisher.exec(cmd::Publish(&channel, "1")).await.unwrap();
+    assert_eq!(result, 1);
+
+    // receive message
+    let message = pubsub.recv().await;
+    assert_eq!(
+        message.unwrap().unwrap(),
+        cmd::SubscribeItem::Message {
+            pattern: Some(pattern.clone()),
+            channel: channel.clone(),
+            payload: Bytes::from_static(b"1")
+        }
+    );
+
+    // unsub
+    pubsub
+        .send(cmd::PUnSubscribe(Some(vec![&pattern])))
+        .unwrap();
+    let message = pubsub.recv().await;
+    assert_eq!(
+        message.unwrap().unwrap(),
+        cmd::SubscribeItem::UnSubscribed(pattern.clone())
+    );
 }

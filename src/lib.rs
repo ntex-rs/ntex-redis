@@ -40,7 +40,7 @@ mod simple;
 
 pub use self::client::{Client, CommandResult};
 pub use self::connector::RedisConnector;
-pub use self::simple::SimpleClient;
+pub use self::simple::{SimpleClient, SubscriptionClient};
 
 /// Macro to create a request array, useful for preparing commands to send. Elements can be any type, or a mixture
 /// of types, that satisfy `Into<Request>`.

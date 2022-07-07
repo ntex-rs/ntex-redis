@@ -9,14 +9,19 @@ mod connection;
 mod hashes;
 mod keys;
 mod lists;
+mod pubsub;
 mod strings;
 mod utils;
 
 pub use self::auth::Auth;
-pub use self::connection::{Ping, Select};
+pub use self::connection::{Ping, Reset, Select};
 pub use self::hashes::{HDel, HGet, HGetAll, HIncrBy, HLen, HSet};
 pub use self::keys::{Del, Exists, Expire, ExpireAt, Keys, Ttl, TtlResult};
 pub use self::lists::{LIndex, LPop, LPush, RPop, RPush};
+pub use self::pubsub::{
+    PSubscribe, PUnSubscribe, Publish, SPublish, SSubscribe, SUnSubscribe, Subscribe,
+    SubscribeItem, UnSubscribe,
+};
 pub use self::strings::{Get, IncrBy, Set};
 
 /// Trait implemented by types that can be used as redis commands
@@ -37,6 +42,7 @@ pub mod commands {
     pub use super::hashes::{HDelCommand, HGetAllCommand, HSetCommand};
     pub use super::keys::{KeysCommand, KeysPatternCommand, TtlCommand};
     pub use super::lists::LPushCommand;
+    pub use super::pubsub::{PubSubCommand, SubscribeOutputCommand};
     pub use super::strings::SetCommand;
     pub use super::utils::{BulkOutputCommand, IntOutputCommand};
 }
