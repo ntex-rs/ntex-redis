@@ -110,7 +110,7 @@ impl Client {
 impl Service<Request> for Client {
     type Response = Response;
     type Error = Error;
-    type Future = Either<CommandResult, Ready<Response, Error>>;
+    type Future<'f> = Either<CommandResult, Ready<Response, Error>>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if self.disconnect.poll_ready(cx).is_ready() {
@@ -120,7 +120,7 @@ impl Service<Request> for Client {
         }
     }
 
-    fn call(&self, req: Request) -> Self::Future {
+    fn call(&self, req: Request) -> Self::Future<'_> {
         if let Err(e) = self.io.encode(req, &Codec) {
             Either::Right(Ready::Err(e))
         } else {

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0-alpha.0] - 2022-xx-xx
+
+* Upgrade to ntex-service-0.4
+
 ## [0.3.3] - 2022-07-07
 
 * pubsub support #5

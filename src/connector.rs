@@ -1,5 +1,3 @@
-use std::future::Future;
-
 use ntex::connect::{self, Address, Connect, Connector};
 use ntex::io::IoBoxed;
 use ntex::{service::Service, time::Seconds, util::ByteString, util::PoolId, util::PoolRef};
@@ -75,40 +73,33 @@ where
     T: Service<Connect<A>, Error = connect::ConnectError>,
     IoBoxed: From<T::Response>,
 {
-    fn _connect(&self) -> impl Future<Output = Result<IoBoxed, ConnectError>> {
-        let pool = self.pool;
-        let passwords = self.passwords.clone();
+    async fn _connect(&self) -> Result<IoBoxed, ConnectError> {
         let fut = self.connector.call(Connect::new(self.address.clone()));
+        let io = IoBoxed::from(fut.await?);
+        io.set_memory_pool(self.pool);
+        io.set_disconnect_timeout(Seconds::ZERO.into());
 
-        async move {
-            let io = IoBoxed::from(fut.await?);
-            io.set_memory_pool(pool);
-            io.set_disconnect_timeout(Seconds::ZERO.into());
+        if self.passwords.is_empty() {
+            Ok(io)
+        } else {
+            let client = SimpleClient::new(io);
 
-            if passwords.is_empty() {
-                Ok(io)
-            } else {
-                let client = SimpleClient::new(io);
-
-                for password in passwords {
-                    if client.exec(cmd::Auth(password)).await? {
-                        return Ok(client.into_inner());
-                    }
+            for password in &self.passwords {
+                if client.exec(cmd::Auth(password)).await? {
+                    return Ok(client.into_inner());
                 }
-                Err(ConnectError::Unauthorized)
             }
+            Err(ConnectError::Unauthorized)
         }
     }
 
     /// Connect to redis server and create shared client
-    pub fn connect(&self) -> impl Future<Output = Result<Client, ConnectError>> {
-        let fut = self._connect();
-        async move { fut.await.map(Client::new) }
+    pub async fn connect(&self) -> Result<Client, ConnectError> {
+        self._connect().await.map(Client::new)
     }
 
     /// Connect to redis server and create simple client
-    pub fn connect_simple(&self) -> impl Future<Output = Result<SimpleClient, ConnectError>> {
-        let fut = self._connect();
-        async move { fut.await.map(SimpleClient::new) }
+    pub async fn connect_simple(&self) -> Result<SimpleClient, ConnectError> {
+        self._connect().await.map(SimpleClient::new)
     }
 }
