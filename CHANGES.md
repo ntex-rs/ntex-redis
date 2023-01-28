@@ -1,5 +1,7 @@
 # Changes
 
+## [0.4.1] - 2023-01-28
+
 * Fix decode uncomple array data
 
 ## [0.4.0] - 2023-01-04
