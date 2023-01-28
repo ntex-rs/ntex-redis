@@ -608,6 +608,13 @@ fn decode_array(buf: &mut BytesMut, idx: usize) -> DecodeResult {
         Some((pos, -1)) => Ok(Some((pos, Response::Nil))),
         Some((pos, size)) if size >= 0 => {
             let size = size as usize;
+
+            // ensure all array items present in buffer
+            let items = buf[idx..].windows(2).filter(|w| w == b"\r\n").count() / 2;
+            if items < size {
+                return Ok(None);
+            }
+
             let mut pos = pos;
             let mut values = Vec::with_capacity(size);
             for _ in 0..size {
@@ -733,6 +740,31 @@ mod tests {
             Response::Bytes(Bytes::from_static(b"TEST1")),
             Response::Bytes(Bytes::from_static(b"TEST2")),
         ]);
+        let deserialized = codec.decode(&mut bytes).unwrap().unwrap();
+        assert_eq!(deserialized, resp);
+    }
+
+    #[test]
+    fn test_decode_array() {
+        let codec = Codec;
+
+        let resp = Response::Array(vec![
+            Response::Bytes(Bytes::from_static(b"TEST1")),
+            Response::Bytes(Bytes::from_static(b"TEST2")),
+        ]);
+
+        let mut bytes = BytesMut::copy_from_slice(b"*2\r\n$5\r\nTEST1\r\n$5\r\nTEST2\r\n");
+        let deserialized = codec.decode(&mut bytes).unwrap().unwrap();
+        assert_eq!(deserialized, resp);
+
+        // uncomplete array data
+        let mut bytes = BytesMut::copy_from_slice(b"*2\r\n$5\r\nTEST1\r\n");
+        let result = codec.decode(&mut bytes).unwrap();
+        assert!(result.is_none());
+
+        // receiving remain data
+        bytes.extend_from_slice(b"$5\r\nTEST2\r\n");
+
         let deserialized = codec.decode(&mut bytes).unwrap().unwrap();
         assert_eq!(deserialized, resp);
     }
