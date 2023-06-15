@@ -3,7 +3,7 @@ use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, t
 
 use ntex::io::{IoBoxed, IoRef, OnDisconnect, RecvError};
 use ntex::util::{poll_fn, ready, Either, Ready};
-use ntex::{channel::pool, service::Service};
+use ntex::{channel::pool, service::ServiceCtx, service::Service};
 
 use super::cmd::Command;
 use super::codec::{Codec, Request, Response};
@@ -82,7 +82,7 @@ impl Client {
         T: Command,
     {
         let is_open = !self.io.is_closed();
-        let fut = self.call(cmd.to_request());
+        let fut = self._call(cmd.to_request());
 
         async move {
             if !is_open {
@@ -97,13 +97,23 @@ impl Client {
 
     /// Delete all the keys of the currently selected DB.
     pub async fn flushdb(&self) -> Result<(), Error> {
-        self.call("FLUSHDB".into()).await?;
+        self._call("FLUSHDB".into()).await?;
         Ok(())
     }
 
     /// Returns true if underlying transport is connected to redis
     pub fn is_connected(&self) -> bool {
         !self.io.is_closed()
+    }
+
+    fn _call(&self, req: Request) -> Either<CommandResult, Ready<Response, Error>> {
+        if let Err(e) = self.io.encode(req, &Codec) {
+            Either::Right(Ready::Err(e))
+        } else {
+            let (tx, rx) = self.pool.channel();
+            self.queue.borrow_mut().push_back(tx);
+            Either::Left(CommandResult { rx })
+        }
     }
 }
 
@@ -120,14 +130,8 @@ impl Service<Request> for Client {
         }
     }
 
-    fn call(&self, req: Request) -> Self::Future<'_> {
-        if let Err(e) = self.io.encode(req, &Codec) {
-            Either::Right(Ready::Err(e))
-        } else {
-            let (tx, rx) = self.pool.channel();
-            self.queue.borrow_mut().push_back(tx);
-            Either::Left(CommandResult { rx })
-        }
+    fn call<'a>(&'a self, req: Request, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
+        self._call(req)
     }
 }
 

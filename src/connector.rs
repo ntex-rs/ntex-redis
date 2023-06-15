@@ -1,14 +1,13 @@
 use ntex::connect::{self, Address, Connect, Connector};
-use ntex::io::IoBoxed;
-use ntex::{service::Service, time::Seconds, util::ByteString, util::PoolId, util::PoolRef};
+use ntex::service::{Pipeline, Service};
+use ntex::{io::IoBoxed, time::Seconds, util::ByteString, util::PoolId, util::PoolRef};
 
-use super::errors::ConnectError;
-use super::{cmd, Client, SimpleClient};
+use super::{cmd, errors::ConnectError, Client, SimpleClient};
 
 /// Redis connector
 pub struct RedisConnector<A, T> {
     address: A,
-    connector: T,
+    connector: Pipeline<T>,
     passwords: Vec<ByteString>,
     pool: PoolRef,
 }
@@ -23,7 +22,7 @@ where
         RedisConnector {
             address,
             passwords: Vec::new(),
-            connector: Connector::default(),
+            connector: Pipeline::new(Connector::default()),
             pool: PoolId::P7.pool_ref(),
         }
     }
@@ -59,7 +58,7 @@ where
         IoBoxed: From<U::Response>,
     {
         RedisConnector {
-            connector,
+            connector: Pipeline::new(connector),
             address: self.address,
             passwords: self.passwords,
             pool: self.pool,

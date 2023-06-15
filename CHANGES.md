@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.0] - 2023-06-22
+
+* Migrate to ntex 0.7
+
 ## [0.4.1] - 2023-01-28
 
 * Fix decode uncomple array data
