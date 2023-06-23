@@ -3,7 +3,7 @@ use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, t
 
 use ntex::io::{IoBoxed, IoRef, OnDisconnect, RecvError};
 use ntex::util::{poll_fn, ready, Either, Ready};
-use ntex::{channel::pool, service::ServiceCtx, service::Service};
+use ntex::{channel::pool, service::Service, service::ServiceCtx};
 
 use super::cmd::Command;
 use super::codec::{Codec, Request, Response};

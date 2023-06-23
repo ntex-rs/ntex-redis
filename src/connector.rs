@@ -73,8 +73,11 @@ where
     IoBoxed: From<T::Response>,
 {
     async fn _connect(&self) -> Result<IoBoxed, ConnectError> {
-        let fut = self.connector.call(Connect::new(self.address.clone()));
-        let io = IoBoxed::from(fut.await?);
+        let io: IoBoxed = self
+            .connector
+            .service_call(Connect::new(self.address.clone()))
+            .await?
+            .into();
         io.set_memory_pool(self.pool);
         io.set_disconnect_timeout(Seconds::ZERO.into());
 

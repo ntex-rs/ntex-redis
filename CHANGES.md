@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.1] - 2023-06-23
+
+* Fix client connector usage, fixes lifetime constraint
+
 ## [0.5.0] - 2023-06-22
 
 * Migrate to ntex 0.7
