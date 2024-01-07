@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0-b.0] - 2024-01-07
+
+* Use "async fn" in trait for Service definition
+
 ## [0.5.1] - 2023-06-23
 
 * Fix client connector usage, fixes lifetime constraint

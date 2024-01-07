@@ -1,13 +1,10 @@
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{future::poll_fn, task::Context, task::Poll};
 
-use super::cmd::{
-    commands::{PubSubCommand, SubscribeOutputCommand},
-    Command,
-};
+use super::cmd::{commands::PubSubCommand, commands::SubscribeOutputCommand, Command};
 use super::codec::Codec;
 use super::errors::{CommandError, Error};
-use ntex::{io::IoBoxed, io::RecvError, util::poll_fn, util::ready, util::Stream};
+use ntex::{io::IoBoxed, io::RecvError, util::ready, util::Stream};
 
 /// Redis client
 pub struct SimpleClient {
