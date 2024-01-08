@@ -7,7 +7,7 @@ documentation = "https://docs.rs/ntex-redis"
 repository = "https://github.com/ntex-rs/ntex-redis.git"
 categories = ["network-programming"]
 keywords = ["ntex", "redis"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 exclude = [".gitignore", ".travis.yml", ".cargo/config"]
 edition = "2018"
 
