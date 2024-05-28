@@ -1,5 +1,9 @@
 # Changes
 
+## [2.0.0] - 2024-05-28
+
+* Use ntex-service 3.0
+
 ## [1.0.0] - 2024-01-09
 
 * Fix decode array #8

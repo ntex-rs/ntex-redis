@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::{cell::RefCell, fmt, future::poll_fn, rc::Rc, task::Context, task::Poll};
+use std::{cell::RefCell, fmt, future::poll_fn, rc::Rc, task::Poll};
 
 use ntex::io::{IoBoxed, IoRef, OnDisconnect, RecvError};
 use ntex::util::ready;
@@ -120,12 +120,15 @@ impl Service<Request> for Client {
     type Response = Response;
     type Error = Error;
 
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if self.disconnect.poll_ready(cx).is_ready() {
-            Poll::Ready(Err(Error::PeerGone(None)))
-        } else {
-            Poll::Ready(Ok(()))
-        }
+    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        poll_fn(|cx| {
+            if self.disconnect.poll_ready(cx).is_ready() {
+                Poll::Ready(Err(Error::PeerGone(None)))
+            } else {
+                Poll::Ready(Ok(()))
+            }
+        })
+        .await
     }
 
     async fn call(&self, req: Request, _: ServiceCtx<'_, Self>) -> Result<Response, Error> {
