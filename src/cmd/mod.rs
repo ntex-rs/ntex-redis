@@ -25,6 +25,32 @@ pub use self::pubsub::{
 pub use self::strings::{Get, IncrBy, Set};
 
 /// Trait implemented by types that can be used as redis commands
+///
+/// Commands are executed with [`Client::exec`](crate::Client::exec) or
+/// [`SimpleClient::exec`](crate::SimpleClient::exec). Implement this trait
+/// to add commands that are not provided by this crate.
+///
+/// ```rust
+/// use ntex_redis::{array, cmd::Command, codec::{Request, Response}, errors::CommandError};
+///
+/// /// STRLEN redis command
+/// struct StrLen(String);
+///
+/// impl Command for StrLen {
+///     type Output = i64;
+///
+///     fn to_request(self) -> Request {
+///         array!["STRLEN", self.0]
+///     }
+///
+///     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
+///         match val {
+///             Response::Integer(val) => Ok(val),
+///             _ => Err(CommandError::Output("Cannot parse response", val)),
+///         }
+///     }
+/// }
+/// ```
 pub trait Command {
     /// Command output type
     type Output;
@@ -37,12 +63,16 @@ pub trait Command {
 }
 
 pub mod commands {
-    //! Command implementations
+    //! Command types returned by the command constructors in [`cmd`](super).
+    //!
+    //! Some types provide builder methods to set additional command
+    //! arguments, e.g. [`SetCommand::expire_secs`].
     pub use super::auth::AuthCommand;
+    pub use super::connection::{PingCommand, ResetCommand, SelectCommand};
     pub use super::hashes::{HDelCommand, HGetAllCommand, HSetCommand};
     pub use super::keys::{KeysCommand, KeysPatternCommand, TtlCommand};
     pub use super::lists::LPushCommand;
-    pub use super::pubsub::{PubSubCommand, SubscribeOutputCommand};
+    pub use super::pubsub::{PubSubCommand, SubscribeOutputCommand, UnSubscribeOutputCommand};
     pub use super::strings::SetCommand;
-    pub use super::utils::{BulkOutputCommand, IntOutputCommand};
+    pub use super::utils::{BoolOutputCommand, BulkOutputCommand, IntOutputCommand};
 }

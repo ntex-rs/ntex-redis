@@ -71,17 +71,17 @@ impl Decoder for Codec {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 /// A bulk string.
 ///
-/// In Redis terminology a string is a byte-array, so this is stored as a
-/// vector of `u8`s to allow clients to interpret the bytes as appropriate.
+/// In Redis terminology a string is a byte-array, so this is stored as
+/// [`Bytes`] to allow clients to interpret the bytes as appropriate.
 pub struct BulkString(Bytes);
 
 impl BulkString {
-    /// Create request from static str
+    /// Create bulk string from a static str, without copying
     pub fn from_static(data: &'static str) -> Self {
         BulkString(Bytes::from_static(data.as_ref()))
     }
 
-    /// Create request from static str
+    /// Create bulk string from a static byte slice, without copying
     pub fn from_bstatic(data: &'static [u8]) -> Self {
         BulkString(Bytes::from_static(data))
     }
@@ -155,48 +155,46 @@ impl From<Vec<u8>> for BulkString {
 
 /// A single RESP value, this owns the data that is to-be written to Redis.
 ///
-/// It is cloneable to allow multiple copies to be delivered in certain circumstances, e.g. multiple
-/// subscribers to the same topic.
+/// Redis commands are sent as an [`Array`](Request::Array) of bulk strings,
+/// see the [`array!`](crate::array) macro.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Request {
-    /// Zero, one or more other `Reqeests`s.
+    /// Zero, one or more other `Request`s.
     Array(Vec<Request>),
 
-    /// A bulk string. In Redis terminology a string is a byte-array, so this is stored as a
-    /// vector of `u8`s to allow clients to interpret the bytes as appropriate.
+    /// A bulk string, see [`BulkString`].
     BulkString(BulkString),
 
-    /// A bulk string. In Redis terminology a string is a byte-array, so this is stored as a
-    /// vector of `u8`s to allow clients to interpret the bytes as appropriate.
+    /// A bulk string backed by static data, encoded without copying.
     BulkStatic(&'static [u8]),
 
-    /// Convert integer to string representation.
+    /// An integer, encoded as a bulk string of its decimal representation.
     BulkInteger(i64),
 
     /// A valid utf-8 string
     String(ByteString),
 
     /// Redis documentation defines an integer as being a signed 64-bit integer:
-    /// https://redis.io/topics/protocol#resp-integers
+    /// <https://redis.io/topics/protocol#resp-integers>
     Integer(i64),
 }
 
 impl Request {
-    /// Create request from static str
+    /// Create bulk string request from a static str
     pub fn from_static(data: &'static str) -> Self {
         Request::BulkStatic(data.as_ref())
     }
 
-    /// Create request from static str
+    /// Create bulk string request from a static byte slice
     pub fn from_bstatic(data: &'static [u8]) -> Self {
         Request::BulkStatic(data)
     }
 
-    #[allow(clippy::should_implement_trait)]
     /// Convenience function for building dynamic Redis commands with variable numbers of
     /// arguments, e.g. RPUSH
     ///
-    /// Self get converted to array if it is not an array.
+    /// `self` gets converted to an array if it is not an array.
+    #[allow(clippy::should_implement_trait)]
     pub fn add<T>(mut self, other: T) -> Self
     where
         Request: From<T>,
@@ -213,7 +211,7 @@ impl Request {
     /// Convenience function for building dynamic Redis commands with variable numbers of
     /// arguments, e.g. RPUSH
     ///
-    /// Self get converted to array if it is not an array.
+    /// `self` gets converted to an array if it is not an array.
     pub fn extend<T>(mut self, other: impl IntoIterator<Item = T>) -> Self
     where
         Request: From<T>,
@@ -292,13 +290,14 @@ impl From<usize> for Request {
 /// A single RESP value, this owns the data that is read from Redis.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Response {
+    /// Null bulk string or null array, i.e. missing value
     Nil,
 
     /// Zero, one or more other `Response`s.
     Array(Vec<Response>),
 
-    /// A bulk string. In Redis terminology a string is a byte-array, so this is stored as a
-    /// vector of `u8`s to allow clients to interpret the bytes as appropriate.
+    /// A bulk string. In Redis terminology a string is a byte-array, so this is stored as
+    /// [`Bytes`] to allow clients to interpret the bytes as appropriate.
     Bytes(Bytes),
 
     /// A valid utf-8 string
@@ -308,7 +307,7 @@ pub enum Response {
     Error(ByteString),
 
     /// Redis documentation defines an integer as being a signed 64-bit integer:
-    /// https://redis.io/topics/protocol#resp-integers
+    /// <https://redis.io/topics/protocol#resp-integers>
     Integer(i64),
 }
 

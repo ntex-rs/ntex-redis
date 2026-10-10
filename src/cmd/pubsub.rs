@@ -15,15 +15,24 @@ const TYPE_MESSAGE: Bytes = Bytes::from_static(b"message");
 const TYPE_SMESSAGE: Bytes = Bytes::from_static(b"smessage");
 const TYPE_PMESSAGE: Bytes = Bytes::from_static(b"pmessage");
 
+/// Marker trait for commands that can be sent over a subscribed connection,
+/// see [`SubscriptionClient::send`](crate::SubscriptionClient::send)
 pub trait PubSubCommand {}
 
+/// Item received from a subscribed connection
 #[derive(Debug, PartialEq, Eq)]
 pub enum SubscribeItem {
+    /// Subscribed to a channel or pattern
     Subscribed(Bytes),
+    /// Unsubscribed from a channel or pattern
     UnSubscribed(Bytes),
+    /// Published message
     Message {
+        /// Matched pattern, set for messages received via `PSUBSCRIBE`
         pattern: Option<Bytes>,
+        /// Channel name
         channel: Bytes,
+        /// Message payload
         payload: Bytes,
     },
 }
@@ -107,6 +116,7 @@ impl TryFrom<Response> for SubscribeItem {
     }
 }
 
+/// SUBSCRIBE, SSUBSCRIBE and PSUBSCRIBE command, see [`Subscribe`]
 pub struct SubscribeOutputCommand(pub(crate) Request);
 
 impl Command for SubscribeOutputCommand {
@@ -121,6 +131,7 @@ impl Command for SubscribeOutputCommand {
     }
 }
 
+/// UNSUBSCRIBE, SUNSUBSCRIBE and PUNSUBSCRIBE command, see [`UnSubscribe`]
 pub struct UnSubscribeOutputCommand(pub(crate) Request);
 
 impl Command for UnSubscribeOutputCommand {
@@ -136,6 +147,9 @@ impl Command for UnSubscribeOutputCommand {
 }
 
 /// PUBLISH redis command
+///
+/// Post a message to the given channel. Returns the number of clients
+/// that received the message.
 pub fn Publish<T, V>(key: T, value: V) -> utils::IntOutputCommand
 where
     BulkString: From<T> + From<V>,
@@ -148,6 +162,9 @@ where
 }
 
 /// SPUBLISH redis command
+///
+/// Post a message to the given shard channel. Returns the number of clients
+/// that received the message.
 pub fn SPublish<T, V>(key: T, value: V) -> utils::IntOutputCommand
 where
     BulkString: From<T> + From<V>,
@@ -160,6 +177,32 @@ where
 }
 
 /// SUBSCRIBE redis command
+///
+/// Subscribe to the given channels. Use with [`SimpleClient::subscribe`](crate::SimpleClient::subscribe),
+/// the connection can only be used for pub/sub commands after this.
+///
+/// ```rust
+/// use ntex_redis::{cmd, RedisConnector};
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
+///     let subscriber = RedisConnector::new("127.0.0.1:6379")
+///         .connect_simple()
+///         .await?
+///         .subscribe(cmd::Subscribe(vec!["my-channel"]))?;
+///
+///     // first item is subscription confirmation
+///     let item = subscriber.recv().await.unwrap()?;
+///     assert_eq!(item, cmd::SubscribeItem::Subscribed("my-channel".into()));
+///
+///     redis.exec(cmd::Publish("my-channel", "hello")).await?;
+///
+///     let item = subscriber.recv().await.unwrap()?;
+///     assert!(matches!(item, cmd::SubscribeItem::Message { payload, .. } if payload == "hello"));
+///     Ok(())
+/// }
+/// ```
 pub fn Subscribe<T>(channels: Vec<T>) -> SubscribeOutputCommand
 where
     BulkString: From<T>,
@@ -172,6 +215,9 @@ where
 }
 
 /// UNSUBSCRIBE redis command
+///
+/// Unsubscribe from the given channels, or from all channels if `None`.
+/// Use with [`SubscriptionClient::send`](crate::SubscriptionClient::send).
 pub fn UnSubscribe<T>(channels: Option<Vec<T>>) -> UnSubscribeOutputCommand
 where
     BulkString: From<T>,
@@ -186,6 +232,8 @@ where
 }
 
 /// SSUBSCRIBE redis command
+///
+/// Subscribe to the given shard channels, see [`Subscribe`].
 pub fn SSubscribe<T>(channels: Vec<T>) -> SubscribeOutputCommand
 where
     BulkString: From<T>,
@@ -198,6 +246,8 @@ where
 }
 
 /// SUNSUBSCRIBE redis command
+///
+/// Unsubscribe from the given shard channels, or from all shard channels if `None`.
 pub fn SUnSubscribe<T>(channels: Option<Vec<T>>) -> UnSubscribeOutputCommand
 where
     BulkString: From<T>,
@@ -212,6 +262,8 @@ where
 }
 
 /// PSUBSCRIBE redis command
+///
+/// Subscribe to channels matching the given glob-style patterns, see [`Subscribe`].
 pub fn PSubscribe<T>(channels: Vec<T>) -> SubscribeOutputCommand
 where
     BulkString: From<T>,
@@ -224,6 +276,8 @@ where
 }
 
 /// PUNSUBSCRIBE redis command
+///
+/// Unsubscribe from the given patterns, or from all patterns if `None`.
 pub fn PUnSubscribe<T>(channels: Option<Vec<T>>) -> UnSubscribeOutputCommand
 where
     BulkString: From<T>,

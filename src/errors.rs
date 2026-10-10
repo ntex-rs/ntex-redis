@@ -10,11 +10,11 @@ use super::codec::Response;
 #[derive(Debug, thiserror::Error)]
 /// Redis protocol errors
 pub enum Error {
-    /// A RESP parsing error occurred
+    /// Redis server response cannot be parsed (RESP protocol error)
     #[error("Redis server response error: {0}")]
     Parse(String),
 
-    /// An IO error occurred
+    /// Connection is closed, with optional IO error
     #[error("Io error: {0:?}")]
     PeerGone(Option<io::Error>),
 }

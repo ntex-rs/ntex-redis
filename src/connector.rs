@@ -10,6 +10,22 @@ type ConnectorPipeline<A> =
     PipelineState<SharedCfg, Connect<A>, IoBoxed, Error<connect::ConnectError>>;
 
 /// Redis connector
+///
+/// ```rust
+/// use ntex_redis::RedisConnector;
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let connector = RedisConnector::new("127.0.0.1:6379");
+///
+///     // shared, pipelined client
+///     let client = connector.connect().await?;
+///
+///     // simple client, supports pub/sub
+///     let simple = connector.connect_simple().await?;
+///     Ok(())
+/// }
+/// ```
 pub struct RedisConnector<A> {
     address: A,
     connector: ConnectorPipeline<A>,
@@ -32,6 +48,10 @@ where
     }
 
     /// Add redis auth password
+    ///
+    /// Can be called multiple times, passwords are tried in order with
+    /// `AUTH` command after connect, until one is accepted. Connect fails with
+    /// [`ConnectError::Unauthorized`] if no password is accepted.
     pub fn password<U>(mut self, password: U) -> Self
     where
         U: AsRef<str>,
@@ -50,6 +70,9 @@ where
     }
 
     /// Use custom connector
+    ///
+    /// For example, a TLS connector from `ntex-tls` can be used to connect
+    /// to redis over TLS.
     pub fn connector<U, F>(mut self, connector: F) -> Self
     where
         F: IntoService<U, SharedCfg, Connect<A>>,

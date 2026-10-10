@@ -45,7 +45,31 @@ where
 
 /// HGETALL redis command
 ///
-/// Returns all fields and values of the hash stored at `key`
+/// Returns all fields and values of the hash stored at `key`.
+/// Returns an empty map if the key does not exist.
+///
+/// ```rust
+/// use ntex_redis::{cmd, RedisConnector};
+/// # use rand::{Rng, distr::Alphanumeric, rng};
+/// # fn gen_random_key() -> String {
+/// #    rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
+/// # }
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
+///     let key = gen_random_key();
+///
+///     redis.exec(cmd::HSet(&key, "field1", "value1").entry("field2", "value2")).await?;
+///
+///     let map = redis.exec(cmd::HGetAll(&key)).await?;
+///     assert_eq!(map.len(), 2);
+///     assert_eq!(map.get(&b"field1"[..]).unwrap(), "value1");
+///
+///     redis.exec(cmd::Del(&key)).await?;
+///     Ok(())
+/// }
+/// ```
 pub fn HGetAll<T>(key: T) -> HGetAllCommand
 where
     BulkString: From<T>,
@@ -56,6 +80,7 @@ where
     ])
 }
 
+/// HGETALL command, see [`HGetAll`](crate::cmd::HGetAll)
 pub struct HGetAllCommand(Vec<Request>);
 
 impl Command for HGetAllCommand {
@@ -72,7 +97,8 @@ impl Command for HGetAllCommand {
 
 /// HSET redis command
 ///
-/// Sets field in the hash stored at key to value.
+/// Sets field in the hash stored at key to value. Returns the number of
+/// fields that were added. Use [`HSetCommand::entry`] to set multiple fields.
 ///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
@@ -108,10 +134,11 @@ where
     ])
 }
 
+/// HSET command, see [`HSet`](crate::cmd::HSet)
 pub struct HSetCommand(Vec<Request>);
 
 impl HSetCommand {
-    /// Insert new entry to a redis hashmap
+    /// Add another field and value to set
     pub fn entry<K, V>(mut self, field: K, value: V) -> Self
     where
         BulkString: From<K> + From<V>,
@@ -121,7 +148,7 @@ impl HSetCommand {
         self
     }
 
-    /// Insert new entry to a redis hashmap
+    /// Add another field and value to set, by mutable reference
     pub fn add_entry<K, V>(&mut self, field: K, value: V)
     where
         BulkString: From<K> + From<V>,
@@ -148,7 +175,8 @@ impl Command for HSetCommand {
 
 /// HDEL redis command
 ///
-/// Removes the specified fields from the hash stored at key.
+/// Removes the specified fields from the hash stored at key. Returns
+/// the number of fields that were removed.
 ///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
@@ -183,10 +211,11 @@ where
     ])
 }
 
+/// HDEL command, see [`HDel`](crate::cmd::HDel)
 pub struct HDelCommand(Vec<Request>);
 
 impl HDelCommand {
-    /// Remove field
+    /// Add another field to remove
     pub fn remove<K>(mut self, field: K) -> Self
     where
         BulkString: From<K>,
@@ -258,7 +287,29 @@ where
 
 /// HINCRBY redis command
 ///
-/// Increments the number stored at `field` in the hash stored at `key` by `increment`.
+/// Increments the number stored at `field` in the hash stored at `key` by `increment`
+/// and returns the value after the increment. Missing field is set to `0` before
+/// the operation.
+///
+/// ```rust
+/// use ntex_redis::{cmd, RedisConnector};
+/// # use rand::{Rng, distr::Alphanumeric, rng};
+/// # fn gen_random_key() -> String {
+/// #    rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
+/// # }
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
+///     let key = gen_random_key();
+///
+///     assert_eq!(redis.exec(cmd::HIncrBy(&key, "field", 5)).await?, 5);
+///     assert_eq!(redis.exec(cmd::HIncrBy(&key, "field", -2)).await?, 3);
+///
+///     redis.exec(cmd::Del(&key)).await?;
+///     Ok(())
+/// }
+/// ```
 pub fn HIncrBy<T, K, I>(key: T, field: K, increment: I) -> utils::IntOutputCommand
 where
     BulkString: From<T> + From<K>,

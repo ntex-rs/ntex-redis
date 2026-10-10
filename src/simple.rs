@@ -7,7 +7,14 @@ use super::errors::{CommandError, Error};
 use ntex_io::{IoBoxed, RecvError};
 use ntex_util::Stream;
 
-/// Redis client
+/// Simple redis client
+///
+/// Executes one command at a time and waits for its response, without
+/// pipelining. It is not clonable, but owns the connection, so it can be
+/// switched to subscription mode with [`SimpleClient::subscribe`].
+/// Use [`Client`](crate::Client) for a shared, pipelined connection.
+///
+/// Created by [`RedisConnector::connect_simple`](crate::RedisConnector::connect_simple).
 pub struct SimpleClient {
     io: IoBoxed,
 }
@@ -31,7 +38,11 @@ impl SimpleClient {
         }
     }
 
-    /// Send redis command
+    /// Send redis command without waiting for the response
+    ///
+    /// The response is not read. Redis replies to every command outside of
+    /// subscription mode, so the next [`exec`](SimpleClient::exec) call
+    /// receives this response instead of its own. Prefer `exec`.
     pub fn send<U>(&self, cmd: U) -> Result<(), CommandError>
     where
         U: Command,
@@ -40,7 +51,11 @@ impl SimpleClient {
         Ok(())
     }
 
-    /// Execute redis SUBSCRIBE command and act with output as stream
+    /// Execute subscribe command and switch the connection to subscription mode
+    ///
+    /// Accepts [`Subscribe`](crate::cmd::Subscribe),
+    /// [`SSubscribe`](crate::cmd::SSubscribe) and [`PSubscribe`](crate::cmd::PSubscribe)
+    /// commands. Returned client is a [`Stream`] of subscription items.
     pub fn subscribe(
         self,
         cmd: SubscribeOutputCommand,
@@ -91,6 +106,9 @@ impl SimpleClient {
 }
 
 /// Redis pubsub client to receive push messages
+///
+/// Created by [`SimpleClient::subscribe`]. The stream does not terminate,
+/// it yields errors after the connection is closed.
 pub struct SubscriptionClient<U: Command + PubSubCommand> {
     client: SimpleClient,
     _cmd: std::marker::PhantomData<U>,
@@ -105,7 +123,10 @@ impl<U: Command + PubSubCommand> Stream for SubscriptionClient<U> {
 }
 
 impl<U: Command + PubSubCommand> SubscriptionClient<U> {
-    /// Get client back. Don't forget reset connection!
+    /// Get client back
+    ///
+    /// The connection stays in subscription mode, reset it with
+    /// [`Reset`](crate::cmd::Reset) before executing regular commands.
     ///
     /// ```rust
     /// use ntex_redis::{cmd, RedisConnector};
@@ -113,16 +134,17 @@ impl<U: Command + PubSubCommand> SubscriptionClient<U> {
     /// #[ntex::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let redis = RedisConnector::new("127.0.0.1:6379").connect_simple().await?;
-    ///    
+    ///
     ///     let subscriber = redis.subscribe(cmd::Subscribe(vec!["test"]))?;
     ///     // do some work
     ///
     ///     // go back to normal client
     ///     let redis = subscriber.into_client();
     ///
-    ///     // and reset connection, client may receive pending subscription messages instead of valid RESET response
+    ///     // reset connection. Pending subscription messages may be
+    ///     // received instead of the RESET response, which is an error
     ///     if let Err(e) = redis.exec(cmd::Reset()).await {
-    ///         println!("Error on reset connection: {}", e);      
+    ///         println!("Error on reset connection: {}", e);
     ///     };
     ///
     ///     Ok(())
@@ -133,18 +155,24 @@ impl<U: Command + PubSubCommand> SubscriptionClient<U> {
     }
 
     /// Send redis subscribe/unsubscribe command
+    ///
+    /// Confirmations are received as [`SubscribeItem`](crate::cmd::SubscribeItem)s
+    /// from this stream.
     pub fn send<T: Command + PubSubCommand>(&self, cmd: T) -> Result<(), CommandError> {
         self.client.send(cmd)
     }
 
-    /// Attempt to pull out the next value of this stream.
+    /// Receive next item from this stream
+    ///
+    /// Returns an error if the connection is closed, never `None`.
     pub async fn recv(&self) -> Option<Result<U::Output, CommandError>> {
         poll_fn(|cx| self.client.poll_recv::<U>(cx)).await
     }
 
     /// Attempt to pull out the next value of this stream, registering
-    /// the current task for wakeup if the value is not yet available,
-    /// and returning None if the payload is exhausted.
+    /// the current task for wakeup if the value is not yet available.
+    ///
+    /// Returns an error if the connection is closed, never `None`.
     pub fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Option<Result<U::Output, CommandError>>> {
         self.client.poll_recv::<U>(cx)
     }

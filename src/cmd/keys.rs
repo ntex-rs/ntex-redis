@@ -8,6 +8,7 @@ use crate::codec::{BulkString, Request, Response};
 /// DEL redis command
 ///
 /// Removes the specified keys. A key is ignored if it does not exist.
+/// Returns the number of keys that were removed.
 ///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
@@ -20,14 +21,13 @@ use crate::codec::{BulkString, Request, Response};
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
 ///     let key = gen_random_key();
+///     let missing = gen_random_key();
 ///
 ///     // set string value
 ///     redis.exec(cmd::Set(&key, "value")).await?;
 ///
 ///     // remove keys
-///     let value = redis.exec(
-///         cmd::Del(&key).key("test_1").key("test_2")
-///     ).await?;
+///     let value = redis.exec(cmd::Del(&key).key(&missing)).await?;
 ///
 ///     assert_eq!(value, 1);
 ///     Ok(())
@@ -45,7 +45,7 @@ where
 
 /// EXISTS redis command
 ///
-/// Returns if key exists.
+/// Returns the number of specified keys that exist.
 ///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
@@ -64,10 +64,11 @@ where
 ///
 ///     // check keys existence
 ///     let value = redis.exec(
-///         cmd::Exists(&key).keys(vec!["test_1", "test_2"])
+///         cmd::Exists(&key).keys(vec![gen_random_key(), gen_random_key()])
 ///     ).await?;
 ///
 ///     assert_eq!(value, 1);
+///     redis.exec(cmd::Del(&key)).await?;
 ///     Ok(())
 /// }
 /// ```
@@ -81,6 +82,7 @@ where
     ])
 }
 
+/// DEL and EXISTS command, see [`Del`](crate::cmd::Del) and [`Exists`](crate::cmd::Exists)
 pub struct KeysCommand(Vec<Request>);
 
 impl KeysCommand {
@@ -120,7 +122,32 @@ impl Command for KeysCommand {
 
 /// EXPIRE redis command
 ///
-/// Set a timeout on `key`.
+/// Set a timeout on `key`, in seconds. After the timeout has expired, the key
+/// will automatically be deleted. Returns `true` if the timeout was set,
+/// `false` if the key does not exist.
+///
+/// ```rust
+/// use ntex_redis::{cmd, RedisConnector};
+/// # use rand::{Rng, distr::Alphanumeric, rng};
+/// # fn gen_random_key() -> String {
+/// #    rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
+/// # }
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
+///     let key = gen_random_key();
+///
+///     redis.exec(cmd::Set(&key, "value")).await?;
+///     assert!(redis.exec(cmd::Expire(&key, 10)).await?);
+///
+///     let ttl = redis.exec(cmd::Ttl(&key)).await?;
+///     assert!(matches!(ttl, cmd::TtlResult::Seconds(1..=10)));
+///
+///     redis.exec(cmd::Del(&key)).await?;
+///     Ok(())
+/// }
+/// ```
 pub fn Expire<T, S>(key: T, seconds: S) -> utils::BoolOutputCommand
 where
     BulkString: From<T>,
@@ -135,7 +162,9 @@ where
 
 /// EXPIREAT redis command
 ///
-/// Set a timeout on `key`.
+/// Set `key` to expire at the specified absolute unix timestamp, in seconds.
+/// A timestamp in the past deletes the key immediately. Returns `true` if
+/// the timeout was set, `false` if the key does not exist.
 pub fn ExpireAt<T, S>(key: T, timestamp: S) -> utils::BoolOutputCommand
 where
     BulkString: From<T>,
@@ -151,6 +180,27 @@ where
 /// TTL redis command
 ///
 /// Returns the remaining time to live of a `key` that has a timeout.
+///
+/// ```rust
+/// use ntex_redis::{cmd, RedisConnector};
+/// # use rand::{Rng, distr::Alphanumeric, rng};
+/// # fn gen_random_key() -> String {
+/// #    rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
+/// # }
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
+///     let key = gen_random_key();
+///
+///     redis.exec(cmd::Set(&key, "value")).await?;
+///     assert_eq!(redis.exec(cmd::Ttl(&key)).await?, cmd::TtlResult::NoExpire);
+///
+///     redis.exec(cmd::Del(&key)).await?;
+///     assert_eq!(redis.exec(cmd::Ttl(&key)).await?, cmd::TtlResult::NotFound);
+///     Ok(())
+/// }
+/// ```
 pub fn Ttl<T>(key: T) -> TtlCommand
 where
     BulkString: From<T>,
@@ -161,13 +211,18 @@ where
     ])
 }
 
+/// Result of the [`Ttl`] command
 #[derive(Debug, PartialEq, Eq)]
 pub enum TtlResult {
+    /// Remaining time to live, in seconds
     Seconds(i64),
+    /// Key exists but has no associated expire
     NoExpire,
+    /// Key does not exist
     NotFound,
 }
 
+/// TTL command, see [`Ttl`]
 pub struct TtlCommand(Vec<Request>);
 
 impl Command for TtlCommand {
@@ -191,6 +246,9 @@ impl Command for TtlCommand {
 ///
 /// Returns all keys matching pattern.
 ///
+/// This command may block the server for a long time on large databases,
+/// use with care in production.
+///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
 /// # use rand::{Rng, distr::Alphanumeric, rng};
@@ -201,16 +259,21 @@ impl Command for TtlCommand {
 /// #[ntex::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
+///     let prefix = gen_random_key();
+///     let first = format!("{prefix}:firstname");
+///     let last = format!("{prefix}:lastname");
 ///
 ///     // set keys
-///     redis.exec(cmd::Set("firstname", "Jack")).await?;
-///     redis.exec(cmd::Set("lastname", "Stuntman")).await?;
+///     redis.exec(cmd::Set(&first, "Jack")).await?;
+///     redis.exec(cmd::Set(&last, "Stuntman")).await?;
 ///
 ///     // get keys
-///     let mut keys = redis.exec(cmd::Keys("*name*")).await?;
+///     let mut keys = redis.exec(cmd::Keys(format!("{prefix}:*name"))).await?;
 ///     # keys.sort();
 ///
-///     assert_eq!(&keys[..], &["firstname", "lastname"][..]);
+///     assert_eq!(keys, [first.as_str(), last.as_str()]);
+///
+///     redis.exec(cmd::Del(&first).key(&last)).await?;
 ///     Ok(())
 /// }
 /// ```
@@ -224,6 +287,7 @@ where
     ]))
 }
 
+/// KEYS command, see [`Keys`]
 pub struct KeysPatternCommand(Request);
 
 impl Command for KeysPatternCommand {
