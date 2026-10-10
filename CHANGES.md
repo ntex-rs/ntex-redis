@@ -32,6 +32,8 @@
 
 * Add `codec::Frame` response reader
 
+* `Codec` is stateful, decoder resumes scanning of a partially received response, use `Codec::new()`
+
 * `Client::exec()` and `SimpleClient::send()` report write errors
 
 * Avoid string allocation for integer arguments of `IncrBy`, `HIncrBy`, `Expire` and `ExpireAt`
