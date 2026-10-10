@@ -1,5 +1,7 @@
 //! Redis protocol codec
-use std::{cmp, collections::HashMap, convert::TryFrom, hash::BuildHasher, hash::Hash, str};
+use std::{
+    cell::Cell, cmp, collections::HashMap, convert::TryFrom, hash::BuildHasher, hash::Hash, str,
+};
 
 use ntex_bytes::{BufMut, BytePageSize, BytePages, ByteString, Bytes, BytesMut};
 use ntex_codec::{Decoder, Encoder};
@@ -11,7 +13,20 @@ use super::{
 };
 
 /// Codec to read/write redis values
-pub struct Codec;
+///
+/// Decoder keeps the scan state of a partially received response, a codec
+/// instance must not be used for decoding of multiple streams.
+#[derive(Debug, Default)]
+pub struct Codec {
+    scan: Scanner,
+}
+
+impl Codec {
+    /// Create new codec
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
 
 impl Encoder for Codec {
     type Item = Request;
@@ -319,7 +334,7 @@ impl Decoder for Codec {
     type Error = Error;
 
     fn decode(&self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if let Some(len) = frame_len(buf)? {
+        if let Some(len) = self.scan.frame_len(buf)? {
             Frame::new(buf.split_to(len)).read_value().map(Some)
         } else {
             Ok(None)
@@ -328,14 +343,17 @@ impl Decoder for Codec {
 }
 
 /// Decoder that splits complete response frames from the read buffer
-pub(crate) struct FrameCodec;
+#[derive(Debug, Default)]
+pub(crate) struct FrameCodec {
+    scan: Scanner,
+}
 
 impl Decoder for FrameCodec {
     type Item = Bytes;
     type Error = Error;
 
     fn decode(&self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        Ok(frame_len(buf)?.map(|len| buf.split_to(len)))
+        Ok(self.scan.frame_len(buf)?.map(|len| buf.split_to(len)))
     }
 }
 
@@ -1085,24 +1103,65 @@ fn parse_int(buf: &[u8], idx: usize) -> Result<Option<(usize, i64)>, Error> {
     }
 }
 
-/// Calculates length of the first complete frame in the buffer
+/// Incremental response scanner
+///
+/// Remembers the position of the first incomplete value, so the next
+/// call resumes scanning instead of starting from the beginning of the buffer.
+#[derive(Debug, Default)]
+struct Scanner {
+    pos: Cell<usize>,
+    // number of values that are not scanned yet, 0 if no scan is in progress
+    pending: Cell<usize>,
+}
+
+impl Scanner {
+    /// Get the length of the first complete response in the buffer
+    fn frame_len(&self, buf: &[u8]) -> Result<Option<usize>, Error> {
+        let (pos, pending) = match self.pending.get() {
+            // buffer can only grow while response is incomplete
+            pending if pending > 0 && self.pos.get() <= buf.len() => (self.pos.get(), pending),
+            _ => (0, 1),
+        };
+        match scan(buf, pos, pending) {
+            Ok(Scan::Incomplete(pos, pending)) => {
+                self.pos.set(pos);
+                self.pending.set(pending);
+                Ok(None)
+            }
+            res => {
+                self.pending.set(0);
+                res.map(|scan| match scan {
+                    Scan::Complete(len) => Some(len),
+                    Scan::Incomplete(..) => None,
+                })
+            }
+        }
+    }
+}
+
+enum Scan {
+    /// Length of the complete response
+    Complete(usize),
+    /// Start of the first incomplete value and number of values to scan
+    Incomplete(usize, usize),
+}
+
+/// Scan response values starting at `pos`
 ///
 /// Buffer is not modified, bulk string payloads are skipped by their length.
-fn frame_len(buf: &[u8]) -> Result<Option<usize>, Error> {
-    let mut pos = 0;
-    // number of values that are not scanned yet
-    let mut pending: usize = 1;
-
+fn scan(buf: &[u8], mut pos: usize, mut pending: usize) -> Result<Scan, Error> {
     while pending > 0 {
+        let start = pos;
+        let incomplete = Ok(Scan::Incomplete(start, pending));
         pending -= 1;
 
         let Some(&kind) = buf.get(pos) else {
-            return Ok(None);
+            return incomplete;
         };
         match kind {
             b'+' | b'-' | b':' => match find_crlf(buf, pos + 1) {
                 Some(p) => pos = p + 2,
-                None => return Ok(None),
+                None => return incomplete,
             },
             b'$' => match parse_int(buf, pos + 1)? {
                 Some((p, -1)) => pos = p,
@@ -1112,14 +1171,14 @@ fn frame_len(buf: &[u8]) -> Result<Option<usize>, Error> {
                         .and_then(|size| p.checked_add(size)?.checked_add(2))
                         .ok_or_else(|| Error::Parse(format!("Invalid string size: {size}")))?;
                     if end > buf.len() {
-                        return Ok(None);
+                        return incomplete;
                     }
                     pos = end;
                 }
                 Some((_, size)) => {
                     return Err(Error::Parse(format!("Invalid string size: {size}")));
                 }
-                None => return Ok(None),
+                None => return incomplete,
             },
             b'*' => match parse_int(buf, pos + 1)? {
                 Some((p, -1)) => pos = p,
@@ -1133,12 +1192,12 @@ fn frame_len(buf: &[u8]) -> Result<Option<usize>, Error> {
                 Some((_, size)) => {
                     return Err(Error::Parse(format!("Invalid array size: {size}")));
                 }
-                None => return Ok(None),
+                None => return incomplete,
             },
             b => return Err(Error::Parse(format!("Unexpected byte: {b}"))),
         }
     }
-    Ok(Some(pos))
+    Ok(Scan::Complete(pos))
 }
 
 #[cfg(test)]
@@ -1154,7 +1213,7 @@ mod tests {
 
     fn obj_to_bytes(obj: Request) -> Bytes {
         let mut pages = BytePages::default();
-        Codec.encode(obj, &mut pages).unwrap();
+        Codec::new().encode(obj, &mut pages).unwrap();
         pages.freeze()
     }
 
@@ -1189,7 +1248,7 @@ mod tests {
 
         let mut bytes = BytesMut::copy_from_slice(b"$11\r\nTHISISATEST\r\n");
         let resp_object = Response::Bytes(Bytes::from_static(b"THISISATEST"));
-        let deserialized = Codec.decode(&mut bytes).unwrap().unwrap();
+        let deserialized = Codec::new().decode(&mut bytes).unwrap().unwrap();
         assert_eq!(deserialized, resp_object);
 
         let bytes = obj_to_bytes(Request::from_static("PING"));
@@ -1226,7 +1285,7 @@ mod tests {
     fn test_array() {
         let req_object = Request::Array(vec![b"TEST1".as_ref().into(), b"TEST2".as_ref().into()]);
         let mut bytes = BytesMut::copy_from_slice(obj_to_bytes(req_object));
-        let codec = Codec;
+        let codec = Codec::new();
         assert_eq!(
             b"*2\r\n$5\r\nTEST1\r\n$5\r\nTEST2\r\n".to_vec(),
             bytes.to_vec()
@@ -1242,7 +1301,7 @@ mod tests {
 
     #[test]
     fn test_decode_array() {
-        let codec = Codec;
+        let codec = Codec::new();
 
         let resp = Response::Array(vec![
             Response::Bytes(Bytes::from_static(b"TEST1")),
@@ -1327,11 +1386,12 @@ mod tests {
 
         // feed data in chunks of every size
         for chunk in 1..=data.len() {
+            let codec = Codec::new();
             let mut buf = BytesMut::new();
             let mut items = Vec::new();
             for part in data.chunks(chunk) {
                 buf.extend_from_slice(part);
-                while let Some(item) = Codec.decode(&mut buf).unwrap() {
+                while let Some(item) = codec.decode(&mut buf).unwrap() {
                     items.push(item);
                 }
             }
@@ -1352,12 +1412,12 @@ mod tests {
             b":12a\r\n",
         ] {
             let mut buf = BytesMut::copy_from_slice(data);
-            assert!(Codec.decode(&mut buf).is_err(), "{data:?}");
+            assert!(Codec::new().decode(&mut buf).is_err(), "{data:?}");
         }
 
         // huge array header does not allocate
         let mut buf = BytesMut::copy_from_slice(b"*9223372036854775807\r\n:1\r\n");
-        assert_eq!(Codec.decode(&mut buf).unwrap(), None);
+        assert_eq!(Codec::new().decode(&mut buf).unwrap(), None);
     }
 
     #[test]
@@ -1365,7 +1425,7 @@ mod tests {
         let mut bytes = BytesMut::new();
         bytes.extend_from_slice(&b"$-1\r\n"[..]);
 
-        let codec = Codec;
+        let codec = Codec::new();
         let deserialized = codec.decode(&mut bytes).unwrap().unwrap();
         assert_eq!(deserialized, Response::Nil);
     }
@@ -1638,18 +1698,66 @@ mod tests {
 
     #[test]
     fn test_frame_codec() {
+        let codec = FrameCodec::default();
         let mut buf = BytesMut::from(&b"+OK\r\n*2\r\n$1\r\na\r\n:1"[..]);
         assert_eq!(
-            FrameCodec.decode(&mut buf).unwrap().unwrap(),
+            codec.decode(&mut buf).unwrap().unwrap(),
             b"+OK\r\n".as_ref()
         );
-        assert!(FrameCodec.decode(&mut buf).unwrap().is_none());
+        assert!(codec.decode(&mut buf).unwrap().is_none());
         buf.extend_from_slice(b"\r\n");
         assert_eq!(
-            FrameCodec.decode(&mut buf).unwrap().unwrap(),
+            codec.decode(&mut buf).unwrap().unwrap(),
             b"*2\r\n$1\r\na\r\n:1\r\n".as_ref()
         );
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_decode_resume() {
+        let codec = Codec::new();
+        let mut buf = BytesMut::from(&b"*3\r\n:1\r\n$5\r\nhe"[..]);
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
+        // scan resumes at the incomplete bulk string
+        assert_eq!((codec.scan.pos.get(), codec.scan.pending.get()), (8, 2));
+        buf.extend_from_slice(b"llo\r\n*1\r\n");
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
+        assert_eq!((codec.scan.pos.get(), codec.scan.pending.get()), (23, 1));
+        buf.extend_from_slice(b"+OK\r\n:2\r\n");
+        assert_eq!(
+            codec.decode(&mut buf).unwrap().unwrap(),
+            Response::Array(vec![
+                Response::Integer(1),
+                Response::Bytes(Bytes::from_static(b"hello")),
+                Response::Array(vec![Response::String(ByteString::from_static("OK"))]),
+            ])
+        );
+        assert_eq!(codec.scan.pending.get(), 0);
+        // next response is scanned from the start of the buffer
+        assert_eq!(
+            codec.decode(&mut buf).unwrap().unwrap(),
+            Response::Integer(2)
+        );
+
+        // error resets state
+        let mut buf = BytesMut::from(&b"*2\r\n:1\r\n"[..]);
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
+        buf.extend_from_slice(b"!\r\n");
+        assert!(codec.decode(&mut buf).is_err());
+        let mut buf = BytesMut::from(&b":3\r\n"[..]);
+        assert_eq!(
+            codec.decode(&mut buf).unwrap().unwrap(),
+            Response::Integer(3)
+        );
+
+        // buffer shorter than saved position resets state
+        let mut buf = BytesMut::from(&b"*2\r\n:1\r\n"[..]);
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
+        let mut buf = BytesMut::from(&b":4\r\n"[..]);
+        assert_eq!(
+            codec.decode(&mut buf).unwrap().unwrap(),
+            Response::Integer(4)
+        );
     }
 
     #[test]

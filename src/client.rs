@@ -35,9 +35,10 @@ impl Client {
         let io_ref = io.get_ref();
         let queue2 = queue.clone();
         ntex_util::spawn(async move {
+            let codec = FrameCodec::default();
             poll_fn(|cx| {
                 loop {
-                    match ready!(io.poll_recv(&FrameCodec, cx)) {
+                    match ready!(io.poll_recv(&codec, cx)) {
                         Ok(item) => {
                             if let Some(tx) = queue2.borrow_mut().pop_front() {
                                 let _ = tx.send(Ok(item));
@@ -109,7 +110,7 @@ impl Client {
     }
 
     async fn _call(&self, req: Request) -> Result<Response, Error> {
-        let frame = self.send(|io| io.encode(req, &Codec)).await?;
+        let frame = self.send(|io| io.encode(req, &Codec::new())).await?;
         Frame::new(frame).read_value()
     }
 

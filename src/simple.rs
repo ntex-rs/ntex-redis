@@ -17,12 +17,16 @@ use ntex_util::Stream;
 /// Created by [`RedisConnector::connect_simple`](crate::RedisConnector::connect_simple).
 pub struct SimpleClient {
     io: IoBoxed,
+    codec: FrameCodec,
 }
 
 impl SimpleClient {
     /// Create new simple client
     pub(crate) fn new(io: IoBoxed) -> Self {
-        SimpleClient { io }
+        SimpleClient {
+            io,
+            codec: FrameCodec::default(),
+        }
     }
 
     /// Execute redis command and wait result
@@ -81,7 +85,7 @@ impl SimpleClient {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<U::Output, CommandError>>> {
         loop {
-            return match ready!(self.io.poll_recv(&FrameCodec, cx)) {
+            return match ready!(self.io.poll_recv(&self.codec, cx)) {
                 Ok(frame) => Poll::Ready(Some(Frame::new(frame).decode::<U>())),
                 // client io does not use dispatcher timers
                 Err(RecvError::Timeout) => continue,
