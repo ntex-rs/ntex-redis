@@ -571,3 +571,626 @@ async fn test_subscribe_stream() {
         }
     );
 }
+
+#[ntex::test]
+async fn test_strings_commands() {
+    let redis = connect().await;
+    let key = new_key();
+
+    assert_eq!(redis.exec(cmd::Incr(&key)).await.unwrap(), 1);
+    assert_eq!(redis.exec(cmd::Decr(&key)).await.unwrap(), 0);
+    assert_eq!(redis.exec(cmd::DecrBy(&key, 5)).await.unwrap(), -5);
+    assert_eq!(redis.exec(cmd::IncrByFloat(&key, 1.5)).await.unwrap(), -3.5);
+    assert!(redis.exec(cmd::Incr(&key)).await.is_err());
+    redis.exec(cmd::Del(&key)).await.unwrap();
+
+    assert_eq!(redis.exec(cmd::Append(&key, "Hello")).await.unwrap(), 5);
+    assert_eq!(redis.exec(cmd::Append(&key, " World")).await.unwrap(), 11);
+    assert_eq!(redis.exec(cmd::StrLen(&key)).await.unwrap(), 11);
+    assert_eq!(
+        redis.exec(cmd::GetRange(&key, 0, 4)).await.unwrap(),
+        "Hello"
+    );
+    assert_eq!(
+        redis.exec(cmd::GetRange(&key, -5, -1)).await.unwrap(),
+        "World"
+    );
+    assert_eq!(
+        redis.exec(cmd::SetRange(&key, 6, "Redis")).await.unwrap(),
+        11
+    );
+    assert_eq!(
+        redis.exec(cmd::GetDel(&key)).await.unwrap().unwrap(),
+        "Hello Redis"
+    );
+    assert_eq!(redis.exec(cmd::GetDel(&key)).await.unwrap(), None);
+    assert_eq!(redis.exec(cmd::StrLen(&key)).await.unwrap(), 0);
+
+    // getex
+    assert_eq!(redis.exec(cmd::GetEx(&key)).await.unwrap(), None);
+    redis.exec(cmd::Set(&key, "v")).await.unwrap();
+    assert_eq!(redis.exec(cmd::GetEx(&key)).await.unwrap().unwrap(), "v");
+    redis
+        .exec(cmd::GetEx(&key).expire_millis(10_000))
+        .await
+        .unwrap();
+    assert!(matches!(
+        redis.exec(cmd::PTtl(&key)).await.unwrap(),
+        cmd::TtlResult::Millis(1..=10_000)
+    ));
+    redis.exec(cmd::GetEx(&key).persist()).await.unwrap();
+    assert_eq!(
+        redis.exec(cmd::Ttl(&key)).await.unwrap(),
+        cmd::TtlResult::NoExpire
+    );
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap();
+    redis
+        .exec(cmd::GetEx(&key).expire_at_secs(now.as_secs() as i64 + 100))
+        .await
+        .unwrap();
+    assert!(matches!(
+        redis.exec(cmd::Ttl(&key)).await.unwrap(),
+        cmd::TtlResult::Seconds(1..=100)
+    ));
+    redis
+        .exec(cmd::GetEx(&key).expire_at_millis(now.as_millis() as i64 + 100_000))
+        .await
+        .unwrap();
+    assert!(matches!(
+        redis.exec(cmd::Ttl(&key)).await.unwrap(),
+        cmd::TtlResult::Seconds(1..=100)
+    ));
+
+    // set with absolute expiration
+    redis
+        .exec(cmd::Set(&key, "v").expire_at_secs(now.as_secs() as i64 + 100))
+        .await
+        .unwrap();
+    assert!(matches!(
+        redis.exec(cmd::Ttl(&key)).await.unwrap(),
+        cmd::TtlResult::Seconds(1..=100)
+    ));
+    redis
+        .exec(cmd::Set(&key, "v").expire_at_millis(now.as_millis() as i64 + 100_000))
+        .await
+        .unwrap();
+    assert!(matches!(
+        redis.exec(cmd::Ttl(&key)).await.unwrap(),
+        cmd::TtlResult::Seconds(1..=100)
+    ));
+    redis.exec(cmd::Del(&key)).await.unwrap();
+
+    // mset / mget
+    let key2 = new_key();
+    let mut mset = cmd::MSet(&key, "1");
+    mset.add_entry(&key2, "2");
+    assert!(redis.exec(mset).await.unwrap());
+    assert_eq!(
+        redis
+            .exec(cmd::MGet(&key).keys([&key2, &new_key()]))
+            .await
+            .unwrap(),
+        vec![Some(Bytes::from("1")), Some(Bytes::from("2")), None]
+    );
+    let key3 = new_key();
+    assert!(
+        !redis
+            .exec(cmd::MSet(&key, "x").entry(&key3, "y").if_not_exists())
+            .await
+            .unwrap()
+    );
+    assert_eq!(redis.exec(cmd::Get(&key3)).await.unwrap(), None);
+    assert!(
+        redis
+            .exec(cmd::MSet(&key3, "y").if_not_exists())
+            .await
+            .unwrap()
+    );
+    redis
+        .exec(cmd::Del(&key).key(&key2).key(&key3))
+        .await
+        .unwrap();
+}
+
+#[ntex::test]
+async fn test_keys_commands() {
+    let redis = connect().await;
+    let key = new_key();
+    let key2 = new_key();
+
+    redis.exec(cmd::Set(&key, "v")).await.unwrap();
+    assert_eq!(redis.exec(cmd::Type(&key)).await.unwrap(), "string");
+    assert_eq!(redis.exec(cmd::Type(&key2)).await.unwrap(), "none");
+    assert_eq!(redis.exec(cmd::Touch(&key).key(&key2)).await.unwrap(), 1);
+
+    // expiration
+    assert_eq!(
+        redis.exec(cmd::PTtl(&key)).await.unwrap(),
+        cmd::TtlResult::NoExpire
+    );
+    assert_eq!(
+        redis.exec(cmd::PTtl(&key2)).await.unwrap(),
+        cmd::TtlResult::NotFound
+    );
+    assert!(!redis.exec(cmd::Persist(&key)).await.unwrap());
+    assert!(redis.exec(cmd::PExpire(&key, 10_000)).await.unwrap());
+    assert!(matches!(
+        redis.exec(cmd::PTtl(&key)).await.unwrap(),
+        cmd::TtlResult::Millis(1..=10_000)
+    ));
+    assert!(redis.exec(cmd::Persist(&key)).await.unwrap());
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    assert!(
+        redis
+            .exec(cmd::PExpireAt(&key, now + 100_000))
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        redis.exec(cmd::Ttl(&key)).await.unwrap(),
+        cmd::TtlResult::Seconds(1..=100)
+    ));
+    assert!(!redis.exec(cmd::PExpire(&key2, 1000)).await.unwrap());
+
+    // rename
+    redis.exec(cmd::Rename(&key, &key2)).await.unwrap();
+    assert_eq!(redis.exec(cmd::Exists(&key)).await.unwrap(), 0);
+    assert!(redis.exec(cmd::Rename(&key, &key2)).await.is_err());
+    redis.exec(cmd::Set(&key, "v2")).await.unwrap();
+    assert!(!redis.exec(cmd::RenameNx(&key, &key2)).await.unwrap());
+    let key3 = new_key();
+    assert!(redis.exec(cmd::RenameNx(&key, &key3)).await.unwrap());
+
+    assert_eq!(
+        redis
+            .exec(cmd::Unlink(&key).keys([&key2, &key3]))
+            .await
+            .unwrap(),
+        2
+    );
+}
+
+#[ntex::test]
+async fn test_scan() {
+    let redis = connect().await;
+    let prefix = new_key();
+    let keys: Vec<_> = (0..25).map(|i| format!("{prefix}:{i}")).collect();
+    for key in &keys {
+        redis.exec(cmd::Set(key, "v")).await.unwrap();
+    }
+    let hkey = format!("{prefix}:hash");
+    redis.exec(cmd::HSet(&hkey, "f", "v")).await.unwrap();
+
+    let mut found = Vec::new();
+    let mut cursor = 0;
+    loop {
+        let (next, batch) = redis
+            .exec(
+                cmd::Scan(cursor)
+                    .pattern(format!("{prefix}:*"))
+                    .count(10)
+                    .key_type("string"),
+            )
+            .await
+            .unwrap();
+        found.extend(batch);
+        if next == 0 {
+            break;
+        }
+        cursor = next;
+    }
+    found.sort();
+    found.dedup();
+    let mut expected: Vec<_> = keys.iter().map(|k| Bytes::from(k.clone())).collect();
+    expected.sort();
+    assert_eq!(found, expected);
+
+    // hscan
+    let (cursor, items) = redis.exec(cmd::HScan(&hkey, 0)).await.unwrap();
+    assert_eq!(cursor, 0);
+    assert_eq!(items, vec![(Bytes::from("f"), Bytes::from("v"))]);
+
+    // sscan
+    let skey = new_key();
+    redis
+        .exec(cmd::SAdd(&skey, "a").members(["b", "c"]))
+        .await
+        .unwrap();
+    let (cursor, mut items) = redis
+        .exec(cmd::SScan(&skey, 0).pattern("[ab]"))
+        .await
+        .unwrap();
+    items.sort();
+    assert_eq!(cursor, 0);
+    assert_eq!(items, ["a", "b"]);
+
+    // zscan
+    let zkey = new_key();
+    redis
+        .exec(cmd::ZAdd(&zkey, 1.5, "a").entry(f64::INFINITY, "b"))
+        .await
+        .unwrap();
+    let (cursor, mut items) = redis.exec(cmd::ZScan(&zkey, 0).count(100)).await.unwrap();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(cursor, 0);
+    assert_eq!(
+        items,
+        vec![(Bytes::from("a"), 1.5), (Bytes::from("b"), f64::INFINITY)]
+    );
+
+    redis
+        .exec(cmd::Del(&hkey).keys(&keys).key(&skey).key(&zkey))
+        .await
+        .unwrap();
+}
+
+#[ntex::test]
+async fn test_lists_commands() {
+    let redis = connect().await;
+    let key = new_key();
+    let key2 = new_key();
+
+    assert_eq!(redis.exec(cmd::LLen(&key)).await.unwrap(), 0);
+    assert!(
+        redis
+            .exec(cmd::LRange(&key, 0, -1))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(redis.exec(cmd::LInsert(&key, "a", "b")).await.unwrap(), 0);
+
+    redis
+        .exec(cmd::RPush(&key, "a").extend(["b", "a", "c", "a"]))
+        .await
+        .unwrap();
+    assert_eq!(redis.exec(cmd::LLen(&key)).await.unwrap(), 5);
+    assert_eq!(
+        redis.exec(cmd::LRange(&key, 1, 2)).await.unwrap(),
+        ["b", "a"]
+    );
+
+    // lpos
+    assert_eq!(redis.exec(cmd::LPos(&key, "a")).await.unwrap(), Some(0));
+    assert_eq!(
+        redis.exec(cmd::LPos(&key, "a").rank(-1)).await.unwrap(),
+        Some(4)
+    );
+    assert_eq!(
+        redis.exec(cmd::LPos(&key, "c").max_len(2)).await.unwrap(),
+        None
+    );
+
+    // lrem, lset, linsert, ltrim
+    assert_eq!(redis.exec(cmd::LRem(&key, 2, "a")).await.unwrap(), 2);
+    assert_eq!(
+        redis.exec(cmd::LRange(&key, 0, -1)).await.unwrap(),
+        ["b", "c", "a"]
+    );
+    redis.exec(cmd::LSet(&key, 0, "x")).await.unwrap();
+    assert!(redis.exec(cmd::LSet(&key, 10, "x")).await.is_err());
+    assert_eq!(redis.exec(cmd::LInsert(&key, "c", "y")).await.unwrap(), 4);
+    assert_eq!(
+        redis
+            .exec(cmd::LInsert(&key, "c", "z").after())
+            .await
+            .unwrap(),
+        5
+    );
+    assert_eq!(redis.exec(cmd::LInsert(&key, "q", "z")).await.unwrap(), -1);
+    assert_eq!(
+        redis.exec(cmd::LRange(&key, 0, -1)).await.unwrap(),
+        ["x", "y", "c", "z", "a"]
+    );
+    redis.exec(cmd::LTrim(&key, 1, -2)).await.unwrap();
+    assert_eq!(
+        redis.exec(cmd::LRange(&key, 0, -1)).await.unwrap(),
+        ["y", "c", "z"]
+    );
+
+    // lmove
+    assert_eq!(
+        redis
+            .exec(cmd::LMove(&key, &key2, cmd::Side::Left, cmd::Side::Right))
+            .await
+            .unwrap()
+            .unwrap(),
+        "y"
+    );
+    assert_eq!(
+        redis
+            .exec(cmd::LMove(&key, &key2, cmd::Side::Right, cmd::Side::Left))
+            .await
+            .unwrap()
+            .unwrap(),
+        "z"
+    );
+    assert_eq!(
+        redis.exec(cmd::LRange(&key2, 0, -1)).await.unwrap(),
+        ["z", "y"]
+    );
+    assert_eq!(
+        redis
+            .exec(cmd::LMove(
+                new_key(),
+                &key2,
+                cmd::Side::Left,
+                cmd::Side::Left
+            ))
+            .await
+            .unwrap(),
+        None
+    );
+
+    redis.exec(cmd::Del(&key).key(&key2)).await.unwrap();
+}
+
+#[ntex::test]
+async fn test_hashes_commands() {
+    let redis = connect().await;
+    let key = new_key();
+
+    assert!(redis.exec(cmd::HSetNx(&key, "a", "1")).await.unwrap());
+    assert!(!redis.exec(cmd::HSetNx(&key, "a", "2")).await.unwrap());
+    redis.exec(cmd::HSet(&key, "b", "hello")).await.unwrap();
+
+    assert!(redis.exec(cmd::HExists(&key, "a")).await.unwrap());
+    assert!(!redis.exec(cmd::HExists(&key, "c")).await.unwrap());
+    assert_eq!(redis.exec(cmd::HStrLen(&key, "b")).await.unwrap(), 5);
+    assert_eq!(redis.exec(cmd::HStrLen(&key, "c")).await.unwrap(), 0);
+
+    let mut keys = redis.exec(cmd::HKeys(&key)).await.unwrap();
+    keys.sort();
+    assert_eq!(keys, ["a", "b"]);
+    let mut vals = redis.exec(cmd::HVals(&key)).await.unwrap();
+    vals.sort();
+    assert_eq!(vals, ["1", "hello"]);
+
+    assert_eq!(
+        redis
+            .exec(cmd::HMGet(&key, "b").fields(["c", "a"]))
+            .await
+            .unwrap(),
+        vec![Some(Bytes::from("hello")), None, Some(Bytes::from("1"))]
+    );
+
+    assert_eq!(
+        redis.exec(cmd::HIncrByFloat(&key, "a", 0.5)).await.unwrap(),
+        1.5
+    );
+    assert_eq!(
+        redis
+            .exec(cmd::HIncrByFloat(&key, "n", -2.25))
+            .await
+            .unwrap(),
+        -2.25
+    );
+    assert!(redis.exec(cmd::HIncrByFloat(&key, "b", 1.0)).await.is_err());
+
+    redis.exec(cmd::Del(&key)).await.unwrap();
+    assert!(redis.exec(cmd::HKeys(&key)).await.unwrap().is_empty());
+}
+
+#[ntex::test]
+async fn test_sets() {
+    let redis = connect().await;
+    let key = new_key();
+    let key2 = new_key();
+
+    assert_eq!(
+        redis
+            .exec(cmd::SAdd(&key, "a").members(["b", "c", "a"]))
+            .await
+            .unwrap(),
+        3
+    );
+    assert_eq!(redis.exec(cmd::SAdd(&key, "a")).await.unwrap(), 0);
+    assert_eq!(redis.exec(cmd::SCard(&key)).await.unwrap(), 3);
+    assert!(redis.exec(cmd::SIsMember(&key, "a")).await.unwrap());
+    assert!(!redis.exec(cmd::SIsMember(&key, "x")).await.unwrap());
+    assert_eq!(
+        redis
+            .exec(cmd::SMIsMember(&key, "a").member("x").members(["c"]))
+            .await
+            .unwrap(),
+        vec![true, false, true]
+    );
+
+    redis.exec(cmd::SAdd(&key2, "c").member("d")).await.unwrap();
+    let mut res = redis.exec(cmd::SUnion(&key).key(&key2)).await.unwrap();
+    res.sort();
+    assert_eq!(res, ["a", "b", "c", "d"]);
+    assert_eq!(
+        redis.exec(cmd::SInter(&key).keys([&key2])).await.unwrap(),
+        ["c"]
+    );
+    let mut res = redis.exec(cmd::SDiff(&key).key(&key2)).await.unwrap();
+    res.sort();
+    assert_eq!(res, ["a", "b"]);
+
+    assert_eq!(
+        redis
+            .exec(cmd::SRem(&key, "a").members(["b", "x"]))
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(redis.exec(cmd::SMembers(&key)).await.unwrap(), ["c"]);
+    assert_eq!(
+        redis.exec(cmd::SRandMember(&key)).await.unwrap().unwrap(),
+        "c"
+    );
+    assert_eq!(redis.exec(cmd::SPop(&key)).await.unwrap().unwrap(), "c");
+    assert_eq!(redis.exec(cmd::SPop(&key)).await.unwrap(), None);
+    assert_eq!(redis.exec(cmd::SRandMember(&key)).await.unwrap(), None);
+    assert!(redis.exec(cmd::SMembers(&key)).await.unwrap().is_empty());
+
+    redis.exec(cmd::Del(&key2)).await.unwrap();
+}
+
+#[ntex::test]
+async fn test_sorted_sets() {
+    let redis = connect().await;
+    let key = new_key();
+
+    let mut zadd = cmd::ZAdd(&key, 1.0, "a").entry(2.0, "b");
+    zadd.add_entry(3.0, "c");
+    assert_eq!(redis.exec(zadd).await.unwrap(), 3);
+    assert_eq!(redis.exec(cmd::ZCard(&key)).await.unwrap(), 3);
+
+    // flags
+    assert_eq!(
+        redis
+            .exec(cmd::ZAdd(&key, 10.0, "a").entry(1.0, "d").if_exists().ch())
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(redis.exec(cmd::ZScore(&key, "d")).await.unwrap(), None);
+    assert_eq!(
+        redis
+            .exec(cmd::ZAdd(&key, 0.0, "a").entry(4.0, "d").if_not_exists())
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        redis.exec(cmd::ZScore(&key, "a")).await.unwrap(),
+        Some(10.0)
+    );
+    assert_eq!(
+        redis
+            .exec(cmd::ZAdd(&key, 5.0, "a").gt().ch())
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        redis
+            .exec(cmd::ZAdd(&key, 5.0, "a").lt().ch())
+            .await
+            .unwrap(),
+        1
+    );
+
+    // a=5 b=2 c=3 d=4
+    assert_eq!(
+        redis.exec(cmd::ZIncrBy(&key, -4.5, "a")).await.unwrap(),
+        0.5
+    );
+    assert_eq!(redis.exec(cmd::ZCount(&key, 2, 3)).await.unwrap(), 2);
+    assert_eq!(
+        redis.exec(cmd::ZCount(&key, "(2", "+inf")).await.unwrap(),
+        2
+    );
+    assert_eq!(redis.exec(cmd::ZRank(&key, "a")).await.unwrap(), Some(0));
+    assert_eq!(redis.exec(cmd::ZRevRank(&key, "a")).await.unwrap(), Some(3));
+    assert_eq!(redis.exec(cmd::ZRank(&key, "x")).await.unwrap(), None);
+
+    // ranges
+    assert_eq!(
+        redis.exec(cmd::ZRange(&key, 0, -1)).await.unwrap(),
+        ["a", "b", "c", "d"]
+    );
+    assert_eq!(
+        redis.exec(cmd::ZRange(&key, 0, 1).rev()).await.unwrap(),
+        ["d", "c"]
+    );
+    assert_eq!(
+        redis
+            .exec(cmd::ZRange(&key, "+inf", 2.0).by_score().rev().limit(1, 2))
+            .await
+            .unwrap(),
+        ["c", "b"]
+    );
+    assert_eq!(
+        redis
+            .exec(cmd::ZRange(&key, 0, 1).with_scores())
+            .await
+            .unwrap(),
+        vec![(Bytes::from("a"), 0.5), (Bytes::from("b"), 2.0)]
+    );
+    assert!(
+        redis
+            .exec(cmd::ZRange(&key, 0, 1).limit(0, 1))
+            .await
+            .is_err()
+    );
+
+    // lex range
+    let lkey = new_key();
+    redis
+        .exec(cmd::ZAdd(&lkey, 0.0, "a").entry(0.0, "b").entry(0.0, "c"))
+        .await
+        .unwrap();
+    assert_eq!(
+        redis
+            .exec(cmd::ZRange(&lkey, "(a", "+").by_lex())
+            .await
+            .unwrap(),
+        ["b", "c"]
+    );
+
+    // pop
+    assert_eq!(
+        redis.exec(cmd::ZPopMin(&key)).await.unwrap(),
+        vec![(Bytes::from("a"), 0.5)]
+    );
+    assert_eq!(
+        redis.exec(cmd::ZPopMax(&key).count(2)).await.unwrap(),
+        vec![(Bytes::from("d"), 4.0), (Bytes::from("c"), 3.0)]
+    );
+    assert_eq!(
+        redis
+            .exec(cmd::ZRem(&key, "b").members(["x"]))
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(redis.exec(cmd::ZPopMin(&key)).await.unwrap().is_empty());
+
+    redis.exec(cmd::Del(&lkey)).await.unwrap();
+}
+
+#[ntex::test]
+async fn test_server_commands() {
+    let redis = connect().await;
+    assert!(redis.exec(cmd::Select(14)).await.unwrap());
+
+    let key = new_key();
+    redis.exec(cmd::Set(&key, "v")).await.unwrap();
+    assert!(redis.exec(cmd::DbSize()).await.unwrap() >= 1);
+    redis.exec(cmd::FlushDb()).await.unwrap();
+    assert_eq!(redis.exec(cmd::DbSize()).await.unwrap(), 0);
+    redis.exec(cmd::Set(&key, "v")).await.unwrap();
+    redis.exec(cmd::FlushDb().asynchronous()).await.unwrap();
+    assert_eq!(redis.exec(cmd::Get(&key)).await.unwrap(), None);
+
+    let info = redis.exec(cmd::Info()).await.unwrap();
+    assert!(info.contains("redis_version:"));
+    let info = redis
+        .exec(cmd::Info().section("server").section("memory"))
+        .await
+        .unwrap();
+    assert!(info.contains("used_memory:"));
+    assert!(!info.contains("connected_clients:"));
+}
+
+#[ntex::test]
+async fn test_connection_commands() {
+    let redis = connect().await;
+
+    assert_eq!(redis.exec(cmd::Echo("hello")).await.unwrap(), "hello");
+    assert_eq!(redis.exec(cmd::ClientGetName()).await.unwrap(), None);
+    redis.exec(cmd::ClientSetName("ntex-redis")).await.unwrap();
+    assert_eq!(
+        redis.exec(cmd::ClientGetName()).await.unwrap().unwrap(),
+        "ntex-redis"
+    );
+    assert!(redis.exec(cmd::ClientSetName("bad name")).await.is_err());
+}

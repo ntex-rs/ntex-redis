@@ -1,7 +1,7 @@
 use ntex_bytes::ByteString;
 
-use super::{Command, CommandError};
-use crate::codec::{Frame, Writer};
+use super::{Command, CommandError, utils};
+use crate::codec::{Arg, Frame, Writer};
 
 /// SELECT redis command
 ///
@@ -117,4 +117,25 @@ impl Command for ResetCommand {
     fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
         frame.string()
     }
+}
+
+/// ECHO redis command
+///
+/// Returns `message`.
+pub fn Echo<T: Arg>(message: T) -> utils::BytesOutputCommand<(&'static str, T)> {
+    utils::BytesOutputCommand(("ECHO", message))
+}
+
+/// CLIENT SETNAME redis command
+///
+/// Assigns a name to the current connection.
+pub fn ClientSetName<T: Arg>(name: T) -> utils::OkOutputCommand<(&'static str, &'static str, T)> {
+    utils::OkOutputCommand(("CLIENT", "SETNAME", name))
+}
+
+/// CLIENT GETNAME redis command
+///
+/// Returns the name of the current connection, `None` if no name is assigned.
+pub fn ClientGetName() -> utils::BulkOutputCommand<(&'static str, &'static str)> {
+    utils::BulkOutputCommand(("CLIENT", "GETNAME"))
 }

@@ -1,6 +1,7 @@
 //! Redis protocol codec
 use std::{
-    cell::Cell, cmp, collections::HashMap, convert::TryFrom, hash::BuildHasher, hash::Hash, str,
+    cell::Cell, cmp, collections::HashMap, convert::TryFrom, fmt, hash::BuildHasher, hash::Hash,
+    str,
 };
 
 use ntex_bytes::{BufMut, BytePageSize, BytePages, ByteString, Bytes, BytesMut};
@@ -153,8 +154,8 @@ const GROW_THRESHOLD: usize = 256 * 1024;
 
 /// A command argument, written as a bulk string.
 ///
-/// Implemented for strings, byte slices, [`Bytes`] and integers. Integers
-/// are written as their decimal representation.
+/// Implemented for strings, byte slices, [`Bytes`], integers and floats. Numbers
+/// are written as their decimal representation, infinity as `inf` and `-inf`.
 pub trait Arg {
     /// Write the argument
     fn write_arg(self, w: &mut Writer<'_>);
@@ -232,6 +233,41 @@ macro_rules! impl_arg_int {
 
 impl_arg_int!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
 
+macro_rules! impl_arg_float {
+    ($($t:ty),*) => {$(
+        impl Arg for $t {
+            fn write_arg(self, w: &mut Writer<'_>) {
+                let mut buf = FloatBuf { buf: [0; 32], len: 0 };
+                // shortest representation that round-trips, `inf` and `-inf` for infinity
+                if fmt::Write::write_fmt(&mut buf, format_args!("{self:?}")).is_ok() {
+                    w.bulk(&buf.buf[..buf.len]);
+                } else {
+                    w.bulk(format!("{self:?}").as_bytes());
+                }
+            }
+        }
+    )*}
+}
+
+impl_arg_float!(f32, f64);
+
+struct FloatBuf {
+    buf: [u8; 32],
+    len: usize,
+}
+
+impl fmt::Write for FloatBuf {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let end = self.len + s.len();
+        if end > self.buf.len() {
+            return Err(fmt::Error);
+        }
+        self.buf[self.len..end].copy_from_slice(s.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+
 /// A tuple of [`Arg`]s that forms a complete request.
 pub trait Args {
     /// Number of arguments
@@ -293,9 +329,18 @@ impl ArgList {
         val.write_arg(&mut Writer::new(&mut self.buf));
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
     pub(crate) fn write(mut self, w: &mut Writer<'_>) {
         w.array(self.len + 1);
         w.arg(self.name);
+        self.buf.move_to(w.buf);
+    }
+
+    /// Write arguments only, array header and command name must be written by caller
+    pub(crate) fn write_args(mut self, w: &mut Writer<'_>) {
         self.buf.move_to(w.buf);
     }
 }
@@ -448,6 +493,24 @@ impl Frame {
             b'-' => Err(self.read_error()),
             _ => Err(self.unexpected("Cannot convert into a string")),
         }
+    }
+
+    /// Read floating point number, sent as a bulk or simple string
+    #[inline]
+    pub fn float(&mut self) -> Result<f64, CommandError> {
+        let data = match self.peek()? {
+            b'+' => self.read_line()?,
+            b'$' => match self.header()? {
+                -1 => return Err(self.unexpected("Not a float")),
+                size => self.read_bulk(size)?,
+            },
+            b'-' => return Err(self.read_error()),
+            _ => return Err(self.unexpected("Not a float")),
+        };
+        str::from_utf8(&data)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| self.unexpected("Not a float"))
     }
 
     /// Read array header, returns number of elements or `None` for nil
@@ -1875,6 +1938,272 @@ mod tests {
         ));
         assert!(matches!(
             frame(b"*3\r\n$3\r\nfoo\r\n$2\r\nch\r\n:1\r\n").decode::<SubscribeOutputCommand>(),
+            Err(CommandError::Output(..))
+        ));
+    }
+
+    fn resp(args: &[&str]) -> Bytes {
+        let mut out = format!("*{}\r\n", args.len());
+        for a in args {
+            out.push_str(&format!("${}\r\n{a}\r\n", a.len()));
+        }
+        Bytes::from(out)
+    }
+
+    fn enc<C: Command>(cmd: C) -> Bytes {
+        write_bytes(|w| cmd.encode(w))
+    }
+
+    #[test]
+    fn test_float_arg() {
+        assert_eq!(write_bytes(|w| w.args((1.5f64,))), resp(&["1.5"]));
+        assert_eq!(write_bytes(|w| w.args((-2.0f64,))), resp(&["-2.0"]));
+        assert_eq!(write_bytes(|w| w.args((0.25f32,))), resp(&["0.25"]));
+        assert_eq!(write_bytes(|w| w.args((1e300f64,))), resp(&["1e300"]));
+        assert_eq!(
+            write_bytes(|w| w.args((f64::MIN_POSITIVE,))),
+            resp(&["2.2250738585072014e-308"])
+        );
+        assert_eq!(
+            write_bytes(|w| w.args((f64::INFINITY, f64::NEG_INFINITY))),
+            resp(&["inf", "-inf"])
+        );
+
+        assert_eq!(frame(b"$3\r\n1.5\r\n").float().unwrap(), 1.5);
+        assert_eq!(frame(b"+-2\r\n").float().unwrap(), -2.0);
+        assert_eq!(frame(b"$3\r\ninf\r\n").float().unwrap(), f64::INFINITY);
+        assert_eq!(frame(b"$4\r\n-inf\r\n").float().unwrap(), f64::NEG_INFINITY);
+        assert!(matches!(
+            frame(b"$1\r\nx\r\n").float(),
+            Err(CommandError::Output(..))
+        ));
+        assert!(matches!(
+            frame(b"$-1\r\n").float(),
+            Err(CommandError::Output(..))
+        ));
+        assert!(matches!(
+            frame(b":1\r\n").float(),
+            Err(CommandError::Output(..))
+        ));
+        assert!(matches!(
+            frame(b"-ERR e\r\n").float(),
+            Err(CommandError::Error(_))
+        ));
+    }
+
+    #[test]
+    fn test_command_encode() {
+        use crate::cmd::{self, Side};
+
+        assert_eq!(enc(cmd::GetEx("k")), resp(&["GETEX", "k"]));
+        assert_eq!(
+            enc(cmd::GetEx("k").expire_millis(5)),
+            resp(&["GETEX", "k", "PX", "5"])
+        );
+        assert_eq!(
+            enc(cmd::GetEx("k").expire_at_secs(6)),
+            resp(&["GETEX", "k", "EXAT", "6"])
+        );
+        assert_eq!(
+            enc(cmd::GetEx("k").expire_at_millis(7)),
+            resp(&["GETEX", "k", "PXAT", "7"])
+        );
+        assert_eq!(
+            enc(cmd::GetEx("k").persist()),
+            resp(&["GETEX", "k", "PERSIST"])
+        );
+        assert_eq!(
+            enc(cmd::Set("k", "v").expire_at_secs(1)),
+            resp(&["SET", "k", "v", "EXAT", "1"])
+        );
+        assert_eq!(
+            enc(cmd::Set("k", "v").expire_at_millis(2)),
+            resp(&["SET", "k", "v", "PXAT", "2"])
+        );
+        assert_eq!(
+            enc(cmd::MSet("a", "1").entry("b", 2).if_not_exists()),
+            resp(&["MSETNX", "a", "1", "b", "2"])
+        );
+        assert_eq!(
+            enc(cmd::LInsert("k", "p", "e").after()),
+            resp(&["LINSERT", "k", "AFTER", "p", "e"])
+        );
+        assert_eq!(
+            enc(cmd::LPos("k", "e").rank(-1).max_len(10)),
+            resp(&["LPOS", "k", "e", "RANK", "-1", "MAXLEN", "10"])
+        );
+        assert_eq!(
+            enc(cmd::LMove("a", "b", Side::Left, Side::Right)),
+            resp(&["LMOVE", "a", "b", "LEFT", "RIGHT"])
+        );
+        assert_eq!(
+            enc(cmd::ZAdd("k", 1.0, "a")),
+            resp(&["ZADD", "k", "1.0", "a"])
+        );
+        assert_eq!(
+            enc(cmd::ZAdd("k", 1.0, "a")
+                .entry(2.5, "b")
+                .if_exists()
+                .gt()
+                .ch()),
+            resp(&["ZADD", "k", "XX", "GT", "CH", "1.0", "a", "2.5", "b"])
+        );
+        assert_eq!(
+            enc(cmd::ZAdd("k", 1.0, "a").if_not_exists().lt()),
+            resp(&["ZADD", "k", "NX", "LT", "1.0", "a"])
+        );
+        assert_eq!(
+            enc(cmd::ZRange("k", "(1", "+inf")
+                .by_score()
+                .rev()
+                .limit(1, 2)
+                .with_scores()),
+            resp(&[
+                "ZRANGE",
+                "k",
+                "(1",
+                "+inf",
+                "BYSCORE",
+                "REV",
+                "LIMIT",
+                "1",
+                "2",
+                "WITHSCORES"
+            ])
+        );
+        assert_eq!(
+            enc(cmd::ZRange("k", "[a", "-").by_lex()),
+            resp(&["ZRANGE", "k", "[a", "-", "BYLEX"])
+        );
+        assert_eq!(
+            enc(cmd::ZPopMax("k").count(3)),
+            resp(&["ZPOPMAX", "k", "3"])
+        );
+        assert_eq!(
+            enc(cmd::Scan(5).pattern("p*").count(10).key_type("hash")),
+            resp(&["SCAN", "5", "MATCH", "p*", "COUNT", "10", "TYPE", "hash"])
+        );
+        assert_eq!(enc(cmd::HScan("k", 0)), resp(&["HSCAN", "k", "0"]));
+        assert_eq!(enc(cmd::FlushAll()), resp(&["FLUSHALL"]));
+        assert_eq!(
+            enc(cmd::FlushAll().asynchronous()),
+            resp(&["FLUSHALL", "ASYNC"])
+        );
+        assert_eq!(enc(cmd::FlushDb()), resp(&["FLUSHDB"]));
+        assert_eq!(enc(cmd::Info()), resp(&["INFO"]));
+    }
+
+    #[test]
+    fn test_command_decode_ext() {
+        use crate::cmd::{TtlResult, commands::*};
+
+        let b = |s: &'static str| Bytes::from_static(s.as_bytes());
+
+        type OkCmd = OkOutputCommand<(&'static str,)>;
+        frame(b"+OK\r\n").decode::<OkCmd>().unwrap();
+        assert!(matches!(
+            frame(b"+QUEUED\r\n").decode::<OkCmd>(),
+            Err(CommandError::Output(..))
+        ));
+        assert!(matches!(
+            frame(b":1\r\n").decode::<OkCmd>(),
+            Err(CommandError::Output(..))
+        ));
+
+        assert!(frame(b"+OK\r\n").decode::<MSetCommand>().unwrap());
+        assert!(!frame(b":0\r\n").decode::<MSetCommand>().unwrap());
+
+        assert_eq!(
+            frame(b":-1\r\n").decode::<PTtlCommand<&str>>().unwrap(),
+            TtlResult::NoExpire
+        );
+        assert_eq!(
+            frame(b":-2\r\n").decode::<PTtlCommand<&str>>().unwrap(),
+            TtlResult::NotFound
+        );
+        assert_eq!(
+            frame(b":15\r\n").decode::<PTtlCommand<&str>>().unwrap(),
+            TtlResult::Millis(15)
+        );
+
+        assert_eq!(
+            frame(b"*2\r\n$1\r\na\r\n$-1\r\n")
+                .decode::<MGetCommand>()
+                .unwrap(),
+            vec![Some(b("a")), None]
+        );
+        assert!(matches!(
+            frame(b"*-1\r\n").decode::<MGetCommand>(),
+            Err(CommandError::Output(..))
+        ));
+        assert_eq!(frame(b"$-1\r\n").decode::<LPosCommand>().unwrap(), None);
+        assert_eq!(frame(b"*-1\r\n").decode::<LPosCommand>().unwrap(), None);
+        assert_eq!(frame(b":3\r\n").decode::<LPosCommand>().unwrap(), Some(3));
+        assert_eq!(
+            frame(b"*3\r\n:1\r\n:0\r\n:1\r\n")
+                .decode::<SMIsMemberCommand>()
+                .unwrap(),
+            vec![true, false, true]
+        );
+        assert_eq!(
+            frame(b"$-1\r\n")
+                .decode::<ZScoreCommand<&str, &str>>()
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            frame(b"$3\r\n2.5\r\n")
+                .decode::<ZScoreCommand<&str, &str>>()
+                .unwrap(),
+            Some(2.5)
+        );
+        assert_eq!(
+            frame(b"$-1\r\n")
+                .decode::<ZRankCommand<&str, &str>>()
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            frame(b":2\r\n")
+                .decode::<ZRankCommand<&str, &str>>()
+                .unwrap(),
+            Some(2)
+        );
+        assert_eq!(
+            frame(b"*4\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n$3\r\ninf\r\n")
+                .decode::<ZPopCommand<&str>>()
+                .unwrap(),
+            vec![(b("a"), 1.0), (b("b"), f64::INFINITY)]
+        );
+        assert!(matches!(
+            frame(b"*1\r\n$1\r\na\r\n").decode::<ZRangeWithScoresCommand>(),
+            Err(CommandError::Output(..))
+        ));
+
+        assert_eq!(
+            frame(b"*2\r\n$2\r\n17\r\n*2\r\n$1\r\na\r\n$1\r\nb\r\n")
+                .decode::<ScanCommand<Bytes>>()
+                .unwrap(),
+            (17, vec![b("a"), b("b")])
+        );
+        assert_eq!(
+            frame(b"*2\r\n$1\r\n0\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n")
+                .decode::<ScanCommand<(Bytes, Bytes)>>()
+                .unwrap(),
+            (0, vec![(b("f"), b("v"))])
+        );
+        assert_eq!(
+            frame(b"*2\r\n$1\r\n0\r\n*2\r\n$1\r\nm\r\n$3\r\n1.5\r\n")
+                .decode::<ScanCommand<(Bytes, f64)>>()
+                .unwrap(),
+            (0, vec![(b("m"), 1.5)])
+        );
+        assert!(matches!(
+            frame(b"*2\r\n$1\r\nx\r\n*0\r\n").decode::<ScanCommand<Bytes>>(),
+            Err(CommandError::Output(..))
+        ));
+        assert!(matches!(
+            frame(b"*1\r\n$1\r\n0\r\n").decode::<ScanCommand<Bytes>>(),
             Err(CommandError::Output(..))
         ));
     }

@@ -38,6 +38,26 @@
 
 * `Client::exec()` and `SimpleClient::send()` report write errors
 
+* Add string commands: `INCR`, `DECR`, `DECRBY`, `INCRBYFLOAT`, `APPEND`, `STRLEN`, `GETDEL`, `GETEX`, `GETRANGE`, `SETRANGE`, `MGET`, `MSET`, `MSETNX`
+
+* Add key commands: `UNLINK`, `TOUCH`, `PEXPIRE`, `PEXPIREAT`, `PERSIST`, `PTTL`, `TYPE`, `RENAME`, `RENAMENX`, `SCAN`
+
+* Add list commands: `LLEN`, `LRANGE`, `LREM`, `LSET`, `LTRIM`, `LINSERT`, `LPOS`, `LMOVE`
+
+* Add hash commands: `HMGET`, `HEXISTS`, `HSETNX`, `HKEYS`, `HVALS`, `HSTRLEN`, `HINCRBYFLOAT`, `HSCAN`
+
+* Add set commands: `SADD`, `SREM`, `SMEMBERS`, `SISMEMBER`, `SMISMEMBER`, `SCARD`, `SPOP`, `SRANDMEMBER`, `SINTER`, `SUNION`, `SDIFF`, `SSCAN`
+
+* Add sorted set commands: `ZADD`, `ZREM`, `ZSCORE`, `ZINCRBY`, `ZCARD`, `ZCOUNT`, `ZRANK`, `ZREVRANK`, `ZRANGE`, `ZPOPMIN`, `ZPOPMAX`, `ZSCAN`
+
+* Add server and connection commands: `FLUSHDB`, `FLUSHALL`, `DBSIZE`, `INFO`, `ECHO`, `CLIENT SETNAME`, `CLIENT GETNAME`
+
+* Add `EXAT` and `PXAT` options to `SET`
+
+* Add `TtlResult::Millis` variant for `PTTL` responses
+
+* `f32` and `f64` implement `codec::Arg`, add `Frame::float()`
+
 * Fix `RedisConnector` not trying next password when `AUTH` is rejected
 
 * Fix `Client::flushdb()` and `Client` service calls hanging after connection is closed
