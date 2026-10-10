@@ -24,6 +24,12 @@
 
 * Fix `Client::flushdb()` desyncing responses, non-array requests are sent as an array
 
+* `Command::to_request()` replaced with `Command::encode()`, commands are written directly to the write buffer without intermediate allocations
+
+* Add `codec::Writer`, `codec::Arg` and `codec::Args`, command arguments accept `Arg` types instead of `BulkString: From<T>`
+
+* `Client::exec()` and `SimpleClient::send()` report write errors
+
 * Avoid string allocation for integer arguments of `IncrBy`, `HIncrBy`, `Expire` and `ExpireAt`
 
 * Export `SelectCommand`, `PingCommand`, `ResetCommand`, `BoolOutputCommand` and

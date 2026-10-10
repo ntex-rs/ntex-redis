@@ -6,7 +6,7 @@ use ntex_service::{Ctx, Service};
 use ntex_util::channel::pool;
 
 use super::cmd::Command;
-use super::codec::{Codec, Request, Response};
+use super::codec::{Codec, Request, Response, Writer};
 use super::errors::{CommandError, Error};
 
 type Queue = Rc<RefCell<VecDeque<pool::Sender<Result<Response, Error>>>>>;
@@ -87,7 +87,7 @@ impl Client {
         if self.io.is_closed() {
             Err(CommandError::Protocol(Error::PeerGone(None)))
         } else {
-            self._call(cmd.to_request())
+            self.send(|io| io.with_write_src(|buf| cmd.encode(&mut Writer::new(buf))))
                 .await
                 .map_err(CommandError::Protocol)
                 .and_then(|res| T::to_output(res.into_result().map_err(CommandError::Error)?))
@@ -107,8 +107,16 @@ impl Client {
     }
 
     async fn _call(&self, req: Request) -> Result<Response, Error> {
-        if let Err(e) = self.io.encode(req, &Codec) {
-            Err(e)
+        self.send(|io| io.encode(req, &Codec)).await
+    }
+
+    async fn send<F, E>(&self, f: F) -> Result<Response, Error>
+    where
+        F: FnOnce(&IoRef) -> Result<(), E>,
+        Error: From<E>,
+    {
+        if let Err(e) = f(&self.io) {
+            Err(e.into())
         } else {
             let (tx, rx) = self.pool.channel();
             self.queue.borrow_mut().push_back(tx);

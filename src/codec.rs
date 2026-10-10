@@ -1,7 +1,7 @@
 //! Redis protocol codec
 use std::{cmp, collections::HashMap, convert::TryFrom, hash::BuildHasher, hash::Hash, str};
 
-use ntex_bytes::{Buf, BufMut, BytePages, ByteString, Bytes, BytesMut};
+use ntex_bytes::{Buf, BufMut, BytePageSize, BytePages, ByteString, Bytes, BytesMut};
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::hash_map::HashMap as HashbrownMap;
 
@@ -15,12 +15,264 @@ impl Encoder for Codec {
     type Error = Error;
 
     fn encode(&self, msg: Request, buf: &mut BytePages) -> Result<(), Self::Error> {
-        // redis commands are always sent as an array
-        if !matches!(msg, Request::Array(_)) {
-            write_header(b'*', 1, buf);
-        }
-        encode_value(msg, buf);
+        Writer::new(buf).request(msg);
         Ok(())
+    }
+}
+
+/// Writes redis requests to a write buffer.
+///
+/// A redis request is an array of bulk strings. Write the array header with
+/// [`array`](Writer::array) followed by exactly that many arguments, or
+/// write a tuple of arguments with [`args`](Writer::args).
+///
+/// ```rust
+/// use ntex_bytes::BytePages;
+/// use ntex_redis::codec::Writer;
+///
+/// let mut buf = BytePages::default();
+/// let mut w = Writer::new(&mut buf);
+/// w.args(("SET", "key", 10));
+///
+/// w.array(3);
+/// w.arg("RPUSH");
+/// w.arg("list");
+/// w.arg(b"value");
+///
+/// assert_eq!(
+///     buf.freeze(),
+///     &b"*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$2\r\n10\r\n\
+///        *3\r\n$5\r\nRPUSH\r\n$4\r\nlist\r\n$5\r\nvalue\r\n"[..]
+/// );
+/// ```
+pub struct Writer<'a> {
+    buf: &'a mut BytePages,
+}
+
+impl<'a> Writer<'a> {
+    /// Create a writer that appends to `buf`
+    pub fn new(buf: &'a mut BytePages) -> Self {
+        Writer { buf }
+    }
+
+    /// Write an array header, it must be followed by `len` arguments
+    pub fn array(&mut self, len: usize) {
+        write_header(b'*', len as i64, self.buf);
+    }
+
+    /// Write an argument
+    pub fn arg<T: Arg>(&mut self, val: T) {
+        val.write_arg(self);
+    }
+
+    /// Write a request from a tuple of arguments
+    pub fn args<T: Args>(&mut self, args: T) {
+        self.array(T::LEN);
+        args.write_args(self);
+    }
+
+    /// Write a request
+    ///
+    /// A request that is not an [`Array`](Request::Array) is sent as
+    /// a single element array.
+    pub fn request(&mut self, req: Request) {
+        if !matches!(req, Request::Array(_)) {
+            self.array(1);
+        }
+        encode_value(req, self.buf);
+    }
+
+    /// Write a bulk string, data is copied
+    fn bulk(&mut self, data: &[u8]) {
+        if data.len() <= SMALL_BULK {
+            // header, data and CRLF in one write
+            let mut out = [0u8; SMALL_BULK + 7];
+            let len = data.len();
+            let start = if len < 10 {
+                out[..2].copy_from_slice(&[b'$', b'0' + len as u8]);
+                2
+            } else {
+                out[..3].copy_from_slice(&[b'$', b'0' + (len / 10) as u8, b'0' + (len % 10) as u8]);
+                3
+            };
+            out[start..start + 2].copy_from_slice(b"\r\n");
+            out[start + 2..start + 2 + len].copy_from_slice(data);
+            out[start + 2 + len..start + 4 + len].copy_from_slice(b"\r\n");
+            self.buf.extend_from_slice(&out[..start + 4 + len]);
+        } else {
+            write_header(b'$', data.len() as i64, self.buf);
+            self.buf.extend_from_slice(data);
+            write_rn(self.buf);
+        }
+    }
+
+    /// Write a bulk string, large data is added without copying
+    fn bulk_bytes(&mut self, data: Bytes) {
+        if data.len() <= SMALL_BULK {
+            self.bulk(&data);
+        } else {
+            write_header(b'$', data.len() as i64, self.buf);
+            self.buf.append(data);
+            write_rn(self.buf);
+        }
+    }
+
+    /// Write an integer as a bulk string
+    fn bulk_int<I: itoa::Integer>(&mut self, val: I) {
+        let mut buffer = itoa::Buffer::new();
+        self.bulk(buffer.format(val).as_bytes());
+    }
+}
+
+/// Bulk strings up to this size are written with a single copy
+const SMALL_BULK: usize = 64;
+
+/// A command argument, written as a bulk string.
+///
+/// Implemented for strings, byte slices, [`Bytes`] and integers. Integers
+/// are written as their decimal representation.
+pub trait Arg {
+    /// Write the argument
+    fn write_arg(self, w: &mut Writer<'_>);
+}
+
+macro_rules! impl_arg_slice {
+    ($($t:ty),*) => {$(
+        impl Arg for $t {
+            fn write_arg(self, w: &mut Writer<'_>) {
+                w.bulk(AsRef::<[u8]>::as_ref(&self));
+            }
+        }
+    )*}
+}
+
+impl_arg_slice!(&str, &&str, &String, String, &[u8], &Vec<u8>, Vec<u8>);
+
+impl<const N: usize> Arg for &[u8; N] {
+    fn write_arg(self, w: &mut Writer<'_>) {
+        w.bulk(self);
+    }
+}
+
+impl Arg for Bytes {
+    fn write_arg(self, w: &mut Writer<'_>) {
+        w.bulk_bytes(self);
+    }
+}
+
+impl Arg for &Bytes {
+    fn write_arg(self, w: &mut Writer<'_>) {
+        w.bulk_bytes(self.clone());
+    }
+}
+
+impl Arg for BytesMut {
+    fn write_arg(self, w: &mut Writer<'_>) {
+        w.bulk_bytes(self.freeze());
+    }
+}
+
+impl Arg for ByteString {
+    fn write_arg(self, w: &mut Writer<'_>) {
+        w.bulk_bytes(self.into_bytes());
+    }
+}
+
+impl Arg for &ByteString {
+    fn write_arg(self, w: &mut Writer<'_>) {
+        w.bulk_bytes(self.as_bytes().clone());
+    }
+}
+
+impl Arg for BulkString {
+    fn write_arg(self, w: &mut Writer<'_>) {
+        w.bulk_bytes(self.0);
+    }
+}
+
+impl Arg for &BulkString {
+    fn write_arg(self, w: &mut Writer<'_>) {
+        w.bulk_bytes(self.0.clone());
+    }
+}
+
+macro_rules! impl_arg_int {
+    ($($t:ty),*) => {$(
+        impl Arg for $t {
+            fn write_arg(self, w: &mut Writer<'_>) {
+                w.bulk_int(self);
+            }
+        }
+    )*}
+}
+
+impl_arg_int!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
+
+/// A tuple of [`Arg`]s that forms a complete request.
+pub trait Args {
+    /// Number of arguments
+    const LEN: usize;
+
+    /// Write the arguments, without the array header
+    fn write_args(self, w: &mut Writer<'_>);
+}
+
+macro_rules! impl_args {
+    ($len:expr; $($t:ident),*) => {
+        impl<$($t: Arg),*> Args for ($($t,)*) {
+            const LEN: usize = $len;
+
+            #[allow(non_snake_case)]
+            fn write_args(self, w: &mut Writer<'_>) {
+                let ($($t,)*) = self;
+                $($t.write_arg(w);)*
+            }
+        }
+    }
+}
+
+impl_args!(1; A);
+impl_args!(2; A, B);
+impl_args!(3; A, B, C);
+impl_args!(4; A, B, C, D);
+impl_args!(5; A, B, C, D, E);
+impl_args!(6; A, B, C, D, E, F);
+impl_args!(7; A, B, C, D, E, F, G);
+impl_args!(8; A, B, C, D, E, F, G, H);
+
+/// Command name and a variable number of arguments, written in advance
+pub(crate) struct ArgList {
+    name: &'static str,
+    len: usize,
+    buf: BytePages,
+}
+
+impl ArgList {
+    pub(crate) fn new(name: &'static str) -> Self {
+        ArgList {
+            name,
+            len: 0,
+            buf: BytePages::new(BytePageSize::Size4),
+        }
+    }
+
+    pub(crate) fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub(crate) fn set_name(&mut self, name: &'static str) {
+        self.name = name;
+    }
+
+    pub(crate) fn push<T: Arg>(&mut self, val: T) {
+        self.len += 1;
+        val.write_arg(&mut Writer::new(&mut self.buf));
+    }
+
+    pub(crate) fn write(mut self, w: &mut Writer<'_>) {
+        w.array(self.len + 1);
+        w.arg(self.name);
+        self.buf.move_to(w.buf);
     }
 }
 
@@ -991,5 +1243,122 @@ mod tests {
             Err((_, _)) => {}
             _ => panic!("Should not be able to convert an odd number of elements to a hashmap"),
         }
+    }
+
+    fn write_bytes(f: impl FnOnce(&mut Writer<'_>)) -> Bytes {
+        let mut pages = BytePages::default();
+        f(&mut Writer::new(&mut pages));
+        pages.freeze()
+    }
+
+    #[test]
+    fn test_writer_bulk_sizes() {
+        for len in [0, 1, 9, 10, 63, 64, 65, 99, 100, 4096, 4097, 10_000] {
+            let data = vec![b'x'; len];
+            let expected = obj_to_bytes(Request::Array(vec![Request::BulkString(
+                data.clone().into(),
+            )]));
+
+            assert_eq!(write_bytes(|w| w.args((&data,))), expected, "slice {len}");
+            assert_eq!(
+                write_bytes(|w| w.args((Bytes::from(data.clone()),))),
+                expected,
+                "bytes {len}"
+            );
+            assert_eq!(
+                write_bytes(|w| w.args((BytesMut::from(&data[..]),))),
+                expected,
+                "bytes_mut {len}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_writer_args() {
+        let s = String::from("str");
+        let bs = ByteString::from_static("bstr");
+        let b = Bytes::from_static(b"b");
+        let bulk = BulkString::from("bulk");
+        let bytes = write_bytes(|w| {
+            w.args((
+                "CMD",
+                &s,
+                s.clone(),
+                b"arr",
+                &b"sl"[..],
+                &bs,
+                bs.clone(),
+                &b,
+            ));
+            w.args((
+                b.clone(),
+                vec![b'v'],
+                &vec![b'w'],
+                bulk.clone(),
+                &bulk,
+                &"r",
+            ));
+        });
+        assert_eq!(
+            bytes,
+            b"*8\r\n$3\r\nCMD\r\n$3\r\nstr\r\n$3\r\nstr\r\n$3\r\narr\r\n$2\r\nsl\r\n\
+              $4\r\nbstr\r\n$4\r\nbstr\r\n$1\r\nb\r\n\
+              *6\r\n$1\r\nb\r\n$1\r\nv\r\n$1\r\nw\r\n$4\r\nbulk\r\n$4\r\nbulk\r\n$1\r\nr\r\n"
+                .as_ref()
+        );
+    }
+
+    #[test]
+    fn test_writer_ints() {
+        let bytes = write_bytes(|w| {
+            w.array(6);
+            w.arg(0u8);
+            w.arg(-1i8);
+            w.arg(i64::MIN);
+            w.arg(u64::MAX);
+            w.arg(1234usize);
+            w.arg(-56isize);
+        });
+        assert_eq!(
+            bytes,
+            b"*6\r\n$1\r\n0\r\n$2\r\n-1\r\n$20\r\n-9223372036854775808\r\n\
+              $20\r\n18446744073709551615\r\n$4\r\n1234\r\n$3\r\n-56\r\n"
+                .as_ref()
+        );
+    }
+
+    #[test]
+    fn test_writer_request() {
+        let req = array!["SET", "x"].add(Request::BulkInteger(10));
+        assert_eq!(write_bytes(|w| w.request(req.clone())), obj_to_bytes(req));
+        // non-array requests are sent as an array
+        assert_eq!(
+            write_bytes(|w| w.request(Request::from_static("PING"))),
+            b"*1\r\n$4\r\nPING\r\n".as_ref()
+        );
+    }
+
+    #[test]
+    fn test_arg_list() {
+        let mut args = ArgList::new("LPUSH");
+        assert_eq!(args.name(), "LPUSH");
+        args.push("key");
+        args.push(vec![b'x'; 100]);
+        args.push(-5i64);
+        args.set_name("LPUSHX");
+
+        let expected = obj_to_bytes(Request::Array(vec![
+            Request::from_static("LPUSHX"),
+            Request::from_static("key"),
+            Request::BulkString(vec![b'x'; 100].into()),
+            Request::BulkInteger(-5),
+        ]));
+        assert_eq!(write_bytes(|w| args.write(w)), expected);
+
+        let empty = ArgList::new("UNSUBSCRIBE");
+        assert_eq!(
+            write_bytes(|w| empty.write(w)),
+            b"*1\r\n$11\r\nUNSUBSCRIBE\r\n".as_ref()
+        );
     }
 }

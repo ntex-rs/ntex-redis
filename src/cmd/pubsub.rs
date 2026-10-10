@@ -3,7 +3,7 @@ use ntex_bytes::Bytes;
 use ntex_util::future::Either;
 use std::convert::TryFrom;
 
-use crate::codec::{BulkString, Request, Response};
+use crate::codec::{Arg, ArgList, Response, Writer};
 
 const TYPE_SUBSCRIBE: Bytes = Bytes::from_static(b"subscribe");
 const TYPE_UNSUBSCRIBE: Bytes = Bytes::from_static(b"unsubscribe");
@@ -117,13 +117,13 @@ impl TryFrom<Response> for SubscribeItem {
 }
 
 /// SUBSCRIBE, SSUBSCRIBE and PSUBSCRIBE command, see [`Subscribe`]
-pub struct SubscribeOutputCommand(pub(crate) Request);
+pub struct SubscribeOutputCommand(pub(crate) ArgList);
 
 impl Command for SubscribeOutputCommand {
     type Output = SubscribeItem;
 
-    fn to_request(self) -> Request {
-        self.0
+    fn encode(self, w: &mut Writer<'_>) {
+        self.0.write(w);
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
@@ -132,13 +132,13 @@ impl Command for SubscribeOutputCommand {
 }
 
 /// UNSUBSCRIBE, SUNSUBSCRIBE and PUNSUBSCRIBE command, see [`UnSubscribe`]
-pub struct UnSubscribeOutputCommand(pub(crate) Request);
+pub struct UnSubscribeOutputCommand(pub(crate) ArgList);
 
 impl Command for UnSubscribeOutputCommand {
     type Output = SubscribeItem;
 
-    fn to_request(self) -> Request {
-        self.0
+    fn encode(self, w: &mut Writer<'_>) {
+        self.0.write(w);
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
@@ -150,30 +150,22 @@ impl Command for UnSubscribeOutputCommand {
 ///
 /// Post a message to the given channel. Returns the number of clients
 /// that received the message.
-pub fn Publish<T, V>(key: T, value: V) -> utils::IntOutputCommand
-where
-    BulkString: From<T> + From<V>,
-{
-    utils::IntOutputCommand(Request::Array(vec![
-        Request::from_static("PUBLISH"),
-        Request::BulkString(key.into()),
-        Request::BulkString(value.into()),
-    ]))
+pub fn Publish<T: Arg, V: Arg>(
+    channel: T,
+    message: V,
+) -> utils::IntOutputCommand<(&'static str, T, V)> {
+    utils::IntOutputCommand(("PUBLISH", channel, message))
 }
 
 /// SPUBLISH redis command
 ///
 /// Post a message to the given shard channel. Returns the number of clients
 /// that received the message.
-pub fn SPublish<T, V>(key: T, value: V) -> utils::IntOutputCommand
-where
-    BulkString: From<T> + From<V>,
-{
-    utils::IntOutputCommand(Request::Array(vec![
-        Request::from_static("SPUBLISH"),
-        Request::BulkString(key.into()),
-        Request::BulkString(value.into()),
-    ]))
+pub fn SPublish<T: Arg, V: Arg>(
+    channel: T,
+    message: V,
+) -> utils::IntOutputCommand<(&'static str, T, V)> {
+    utils::IntOutputCommand(("SPUBLISH", channel, message))
 }
 
 /// SUBSCRIBE redis command
@@ -203,10 +195,7 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub fn Subscribe<T>(channels: Vec<T>) -> SubscribeOutputCommand
-where
-    BulkString: From<T>,
-{
+pub fn Subscribe<T: Arg>(channels: Vec<T>) -> SubscribeOutputCommand {
     SubscribeOutputCommand(channels_request("SUBSCRIBE", Some(channels)))
 }
 
@@ -214,66 +203,44 @@ where
 ///
 /// Unsubscribe from the given channels, or from all channels if `None`.
 /// Use with [`SubscriptionClient::send`](crate::SubscriptionClient::send).
-pub fn UnSubscribe<T>(channels: Option<Vec<T>>) -> UnSubscribeOutputCommand
-where
-    BulkString: From<T>,
-{
+pub fn UnSubscribe<T: Arg>(channels: Option<Vec<T>>) -> UnSubscribeOutputCommand {
     UnSubscribeOutputCommand(channels_request("UNSUBSCRIBE", channels))
 }
 
 /// SSUBSCRIBE redis command
 ///
 /// Subscribe to the given shard channels, see [`Subscribe`].
-pub fn SSubscribe<T>(channels: Vec<T>) -> SubscribeOutputCommand
-where
-    BulkString: From<T>,
-{
+pub fn SSubscribe<T: Arg>(channels: Vec<T>) -> SubscribeOutputCommand {
     SubscribeOutputCommand(channels_request("SSUBSCRIBE", Some(channels)))
 }
 
 /// SUNSUBSCRIBE redis command
 ///
 /// Unsubscribe from the given shard channels, or from all shard channels if `None`.
-pub fn SUnSubscribe<T>(channels: Option<Vec<T>>) -> UnSubscribeOutputCommand
-where
-    BulkString: From<T>,
-{
+pub fn SUnSubscribe<T: Arg>(channels: Option<Vec<T>>) -> UnSubscribeOutputCommand {
     UnSubscribeOutputCommand(channels_request("SUNSUBSCRIBE", channels))
 }
 
 /// PSUBSCRIBE redis command
 ///
 /// Subscribe to channels matching the given glob-style patterns, see [`Subscribe`].
-pub fn PSubscribe<T>(channels: Vec<T>) -> SubscribeOutputCommand
-where
-    BulkString: From<T>,
-{
+pub fn PSubscribe<T: Arg>(channels: Vec<T>) -> SubscribeOutputCommand {
     SubscribeOutputCommand(channels_request("PSUBSCRIBE", Some(channels)))
 }
 
 /// PUNSUBSCRIBE redis command
 ///
 /// Unsubscribe from the given patterns, or from all patterns if `None`.
-pub fn PUnSubscribe<T>(channels: Option<Vec<T>>) -> UnSubscribeOutputCommand
-where
-    BulkString: From<T>,
-{
+pub fn PUnSubscribe<T: Arg>(channels: Option<Vec<T>>) -> UnSubscribeOutputCommand {
     UnSubscribeOutputCommand(channels_request("PUNSUBSCRIBE", channels))
 }
 
-fn channels_request<T>(cmd: &'static str, channels: Option<Vec<T>>) -> Request
-where
-    BulkString: From<T>,
-{
-    let channels = channels.unwrap_or_default();
-    let mut req = Vec::with_capacity(channels.len() + 1);
-    req.push(Request::from_static(cmd));
-    req.extend(
-        channels
-            .into_iter()
-            .map(|ch| Request::BulkString(ch.into())),
-    );
-    Request::Array(req)
+fn channels_request<T: Arg>(cmd: &'static str, channels: Option<Vec<T>>) -> ArgList {
+    let mut args = ArgList::new(cmd);
+    for ch in channels.into_iter().flatten() {
+        args.push(ch);
+    }
+    args
 }
 
 impl PubSubCommand for SubscribeOutputCommand {}

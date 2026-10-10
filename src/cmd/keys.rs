@@ -3,7 +3,7 @@ use std::convert::{TryFrom, TryInto};
 use ntex_bytes::ByteString;
 
 use super::{Command, CommandError, utils};
-use crate::codec::{BulkString, Request, Response};
+use crate::codec::{Arg, ArgList, Response, Writer};
 
 /// DEL redis command
 ///
@@ -33,14 +33,8 @@ use crate::codec::{BulkString, Request, Response};
 ///     Ok(())
 /// }
 /// ```
-pub fn Del<T>(key: T) -> KeysCommand
-where
-    BulkString: From<T>,
-{
-    KeysCommand(vec![
-        Request::from_static("DEL"),
-        Request::BulkString(key.into()),
-    ])
+pub fn Del<T: Arg>(key: T) -> KeysCommand {
+    KeysCommand::new("DEL", key)
 }
 
 /// EXISTS redis command
@@ -72,35 +66,31 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub fn Exists<T>(key: T) -> KeysCommand
-where
-    BulkString: From<T>,
-{
-    KeysCommand(vec![
-        Request::from_static("EXISTS"),
-        Request::BulkString(key.into()),
-    ])
+pub fn Exists<T: Arg>(key: T) -> KeysCommand {
+    KeysCommand::new("EXISTS", key)
 }
 
 /// DEL and EXISTS command, see [`Del`](crate::cmd::Del) and [`Exists`](crate::cmd::Exists)
-pub struct KeysCommand(Vec<Request>);
+pub struct KeysCommand(ArgList);
 
 impl KeysCommand {
+    fn new<T: Arg>(name: &'static str, key: T) -> Self {
+        let mut args = ArgList::new(name);
+        args.push(key);
+        KeysCommand(args)
+    }
+
     /// Add a key to this command.
-    pub fn key<T>(mut self, other: T) -> Self
-    where
-        BulkString: From<T>,
-    {
-        self.0.push(other.into());
+    pub fn key<T: Arg>(mut self, other: T) -> Self {
+        self.0.push(other);
         self
     }
 
     /// Add more keys to this command.
-    pub fn keys<T>(mut self, other: impl IntoIterator<Item = T>) -> Self
-    where
-        BulkString: From<T>,
-    {
-        self.0.extend(other.into_iter().map(|t| t.into()));
+    pub fn keys<T: Arg>(mut self, other: impl IntoIterator<Item = T>) -> Self {
+        for key in other {
+            self.0.push(key);
+        }
         self
     }
 }
@@ -108,8 +98,8 @@ impl KeysCommand {
 impl Command for KeysCommand {
     type Output = usize;
 
-    fn to_request(self) -> Request {
-        Request::Array(self.0)
+    fn encode(self, w: &mut Writer<'_>) {
+        self.0.write(w);
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
@@ -148,16 +138,12 @@ impl Command for KeysCommand {
 ///     Ok(())
 /// }
 /// ```
-pub fn Expire<T, S>(key: T, seconds: S) -> utils::BoolOutputCommand
+pub fn Expire<T, S>(key: T, seconds: S) -> utils::BoolOutputCommand<(&'static str, T, i64)>
 where
-    BulkString: From<T>,
+    T: Arg,
     i64: From<S>,
 {
-    utils::BoolOutputCommand(Request::Array(vec![
-        Request::from_static("EXPIRE"),
-        Request::BulkString(key.into()),
-        Request::BulkInteger(i64::from(seconds)),
-    ]))
+    utils::BoolOutputCommand(("EXPIRE", key, i64::from(seconds)))
 }
 
 /// EXPIREAT redis command
@@ -165,16 +151,12 @@ where
 /// Set `key` to expire at the specified absolute unix timestamp, in seconds.
 /// A timestamp in the past deletes the key immediately. Returns `true` if
 /// the timeout was set, `false` if the key does not exist.
-pub fn ExpireAt<T, S>(key: T, timestamp: S) -> utils::BoolOutputCommand
+pub fn ExpireAt<T, S>(key: T, timestamp: S) -> utils::BoolOutputCommand<(&'static str, T, i64)>
 where
-    BulkString: From<T>,
+    T: Arg,
     i64: From<S>,
 {
-    utils::BoolOutputCommand(Request::Array(vec![
-        Request::from_static("EXPIREAT"),
-        Request::BulkString(key.into()),
-        Request::BulkInteger(i64::from(timestamp)),
-    ]))
+    utils::BoolOutputCommand(("EXPIREAT", key, i64::from(timestamp)))
 }
 
 /// TTL redis command
@@ -201,14 +183,8 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub fn Ttl<T>(key: T) -> TtlCommand
-where
-    BulkString: From<T>,
-{
-    TtlCommand(vec![
-        Request::from_static("TTL"),
-        Request::BulkString(key.into()),
-    ])
+pub fn Ttl<T: Arg>(key: T) -> TtlCommand<T> {
+    TtlCommand(key)
 }
 
 /// Result of the [`Ttl`] command
@@ -223,13 +199,13 @@ pub enum TtlResult {
 }
 
 /// TTL command, see [`Ttl`]
-pub struct TtlCommand(Vec<Request>);
+pub struct TtlCommand<T>(T);
 
-impl Command for TtlCommand {
+impl<T: Arg> Command for TtlCommand<T> {
     type Output = TtlResult;
 
-    fn to_request(self) -> Request {
-        Request::Array(self.0)
+    fn encode(self, w: &mut Writer<'_>) {
+        w.args(("TTL", self.0));
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
@@ -277,24 +253,18 @@ impl Command for TtlCommand {
 ///     Ok(())
 /// }
 /// ```
-pub fn Keys<T>(key: T) -> KeysPatternCommand
-where
-    BulkString: From<T>,
-{
-    KeysPatternCommand(Request::Array(vec![
-        Request::from_static("KEYS"),
-        Request::BulkString(key.into()),
-    ]))
+pub fn Keys<T: Arg>(pattern: T) -> KeysPatternCommand<T> {
+    KeysPatternCommand(pattern)
 }
 
 /// KEYS command, see [`Keys`]
-pub struct KeysPatternCommand(Request);
+pub struct KeysPatternCommand<T>(T);
 
-impl Command for KeysPatternCommand {
+impl<T: Arg> Command for KeysPatternCommand<T> {
     type Output = Vec<ByteString>;
 
-    fn to_request(self) -> Request {
-        self.0
+    fn encode(self, w: &mut Writer<'_>) {
+        w.args(("KEYS", self.0));
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {

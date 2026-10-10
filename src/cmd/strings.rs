@@ -1,5 +1,5 @@
 use super::{Command, CommandError, utils};
-use crate::codec::{BulkString, Request, Response};
+use crate::codec::{Arg, Response, Writer};
 
 /// GET redis command
 ///
@@ -28,14 +28,8 @@ use crate::codec::{BulkString, Request, Response};
 ///     Ok(())
 /// }
 /// ```
-pub fn Get<T>(key: T) -> utils::BulkOutputCommand
-where
-    BulkString: From<T>,
-{
-    utils::BulkOutputCommand(Request::Array(vec![
-        Request::from_static("GET"),
-        Request::BulkString(key.into()),
-    ]))
+pub fn Get<T: Arg>(key: T) -> utils::BulkOutputCommand<(&'static str, T)> {
+    utils::BulkOutputCommand(("GET", key))
 }
 
 /// SET redis command
@@ -65,46 +59,35 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub fn Set<T, V>(key: T, value: V) -> SetCommand
-where
-    BulkString: From<T> + From<V>,
-{
+pub fn Set<T: Arg, V: Arg>(key: T, value: V) -> SetCommand<T, V> {
     SetCommand {
-        req: vec![
-            Request::from_bstatic(b"SET"),
-            Request::BulkString(key.into()),
-            Request::BulkString(value.into()),
-        ],
-        expire: Expire::None,
+        key,
+        value,
+        expire: None,
         keepttl: false,
         exists: None,
     }
 }
 
-enum Expire {
-    None,
-    Ex(Request),
-    Px(Request),
-}
-
 /// SET command, see [`Set`](crate::cmd::Set)
-pub struct SetCommand {
-    req: Vec<Request>,
-    expire: Expire,
+pub struct SetCommand<T, V> {
+    key: T,
+    value: V,
+    expire: Option<(&'static str, i64)>,
     keepttl: bool,
     exists: Option<bool>,
 }
 
-impl SetCommand {
+impl<T, V> SetCommand<T, V> {
     /// Set the specified expire time, in seconds.
     pub fn expire_secs(mut self, secs: i64) -> Self {
-        self.expire = Expire::Ex(Request::BulkInteger(secs));
+        self.expire = Some(("EX", secs));
         self
     }
 
     /// Set the specified expire time, in milliseconds.
     pub fn expire_millis(mut self, millis: i64) -> Self {
-        self.expire = Expire::Px(Request::BulkInteger(millis));
+        self.expire = Some(("PX", millis));
         self
     }
 
@@ -127,38 +110,35 @@ impl SetCommand {
     }
 }
 
-impl Command for SetCommand {
+impl<T: Arg, V: Arg> Command for SetCommand<T, V> {
     type Output = bool;
 
-    fn to_request(mut self) -> Request {
+    fn encode(self, w: &mut Writer<'_>) {
+        let len = 3
+            + if self.expire.is_some() { 2 } else { 0 }
+            + usize::from(self.exists.is_some())
+            + usize::from(self.keepttl);
+
+        w.array(len);
+        w.arg("SET");
+        w.arg(self.key);
+        w.arg(self.value);
+
         // EX|PX
-        match self.expire {
-            Expire::None => (),
-            Expire::Ex(r) => {
-                self.req.push(Request::from_bstatic(b"EX"));
-                self.req.push(r);
-            }
-            Expire::Px(r) => {
-                self.req.push(Request::from_bstatic(b"PX"));
-                self.req.push(r);
-            }
+        if let Some((name, val)) = self.expire {
+            w.arg(name);
+            w.arg(val);
         }
 
         // NX|XX
         if let Some(exists) = self.exists {
-            self.req.push(if exists {
-                Request::from_bstatic(b"XX")
-            } else {
-                Request::from_bstatic(b"NX")
-            });
+            w.arg(if exists { "XX" } else { "NX" });
         }
 
         // KEEPTTL
         if self.keepttl {
-            self.req.push(Request::from_bstatic(b"KEEPTTL"))
+            w.arg("KEEPTTL");
         }
-
-        Request::Array(self.req)
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
@@ -200,14 +180,10 @@ impl Command for SetCommand {
 ///     Ok(())
 /// }
 /// ```
-pub fn IncrBy<T, I>(key: T, increment: I) -> utils::IntOutputCommand
+pub fn IncrBy<T, I>(key: T, increment: I) -> utils::IntOutputCommand<(&'static str, T, i64)>
 where
-    BulkString: From<T>,
+    T: Arg,
     i64: From<I>,
 {
-    utils::IntOutputCommand(Request::Array(vec![
-        Request::from_static("INCRBY"),
-        Request::BulkString(key.into()),
-        Request::BulkInteger(i64::from(increment)),
-    ]))
+    utils::IntOutputCommand(("INCRBY", key, i64::from(increment)))
 }
