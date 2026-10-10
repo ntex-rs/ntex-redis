@@ -16,6 +16,14 @@
 
 * Fix `SimpleClient` hang on write backpressure
 
+* Fix decoder corrupting stream when an array response arrives in multiple reads
+
+* Faster decoding of large array responses, bulk string payloads are skipped by length
+
+* Fix `UnSubscribe(None)`, `SUnSubscribe(None)` and `PUnSubscribe(None)` requests
+
+* Avoid string allocation for integer arguments of `IncrBy`, `HIncrBy`, `Expire` and `ExpireAt`
+
 * Export `SelectCommand`, `PingCommand`, `ResetCommand`, `BoolOutputCommand` and
   `UnSubscribeOutputCommand` from `cmd::commands`
 

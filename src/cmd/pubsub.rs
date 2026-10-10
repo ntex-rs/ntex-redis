@@ -207,11 +207,7 @@ pub fn Subscribe<T>(channels: Vec<T>) -> SubscribeOutputCommand
 where
     BulkString: From<T>,
 {
-    let mut req = Request::from_static("SUBSCRIBE");
-    for channel in channels {
-        req = req.add(Request::BulkString(channel.into()));
-    }
-    SubscribeOutputCommand(req)
+    SubscribeOutputCommand(channels_request("SUBSCRIBE", Some(channels)))
 }
 
 /// UNSUBSCRIBE redis command
@@ -222,13 +218,7 @@ pub fn UnSubscribe<T>(channels: Option<Vec<T>>) -> UnSubscribeOutputCommand
 where
     BulkString: From<T>,
 {
-    let mut req = Request::from_static("UNSUBSCRIBE");
-    if let Some(channels) = channels {
-        for channel in channels {
-            req = req.add(Request::BulkString(channel.into()));
-        }
-    }
-    UnSubscribeOutputCommand(req)
+    UnSubscribeOutputCommand(channels_request("UNSUBSCRIBE", channels))
 }
 
 /// SSUBSCRIBE redis command
@@ -238,11 +228,7 @@ pub fn SSubscribe<T>(channels: Vec<T>) -> SubscribeOutputCommand
 where
     BulkString: From<T>,
 {
-    let mut req = Request::from_static("SSUBSCRIBE");
-    for channel in channels {
-        req = req.add(Request::BulkString(channel.into()));
-    }
-    SubscribeOutputCommand(req)
+    SubscribeOutputCommand(channels_request("SSUBSCRIBE", Some(channels)))
 }
 
 /// SUNSUBSCRIBE redis command
@@ -252,13 +238,7 @@ pub fn SUnSubscribe<T>(channels: Option<Vec<T>>) -> UnSubscribeOutputCommand
 where
     BulkString: From<T>,
 {
-    let mut req = Request::from_static("SUNSUBSCRIBE");
-    if let Some(channels) = channels {
-        for channel in channels {
-            req = req.add(Request::BulkString(channel.into()));
-        }
-    }
-    UnSubscribeOutputCommand(req)
+    UnSubscribeOutputCommand(channels_request("SUNSUBSCRIBE", channels))
 }
 
 /// PSUBSCRIBE redis command
@@ -268,11 +248,7 @@ pub fn PSubscribe<T>(channels: Vec<T>) -> SubscribeOutputCommand
 where
     BulkString: From<T>,
 {
-    let mut req = Request::from_static("PSUBSCRIBE");
-    for channel in channels {
-        req = req.add(Request::BulkString(channel.into()));
-    }
-    SubscribeOutputCommand(req)
+    SubscribeOutputCommand(channels_request("PSUBSCRIBE", Some(channels)))
 }
 
 /// PUNSUBSCRIBE redis command
@@ -282,13 +258,22 @@ pub fn PUnSubscribe<T>(channels: Option<Vec<T>>) -> UnSubscribeOutputCommand
 where
     BulkString: From<T>,
 {
-    let mut req = Request::from_static("PUNSUBSCRIBE");
-    if let Some(channels) = channels {
-        for channel in channels {
-            req = req.add(Request::BulkString(channel.into()));
-        }
-    }
-    UnSubscribeOutputCommand(req)
+    UnSubscribeOutputCommand(channels_request("PUNSUBSCRIBE", channels))
+}
+
+fn channels_request<T>(cmd: &'static str, channels: Option<Vec<T>>) -> Request
+where
+    BulkString: From<T>,
+{
+    let channels = channels.unwrap_or_default();
+    let mut req = Vec::with_capacity(channels.len() + 1);
+    req.push(Request::from_static(cmd));
+    req.extend(
+        channels
+            .into_iter()
+            .map(|ch| Request::BulkString(ch.into())),
+    );
+    Request::Array(req)
 }
 
 impl PubSubCommand for SubscribeOutputCommand {}

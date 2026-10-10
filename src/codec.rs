@@ -58,12 +58,10 @@ impl Decoder for Codec {
     type Error = Error;
 
     fn decode(&self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        match decode(buf, 0)? {
-            Some((pos, item)) => {
-                buf.advance(pos);
-                Ok(Some(item))
-            }
-            None => Ok(None),
+        if frame_len(buf)?.is_some() {
+            decode_value(buf).map(Some)
+        } else {
+            Ok(None)
         }
     }
 }
@@ -554,174 +552,150 @@ fn write_string(symb: u8, string: &str, buf: &mut BytePages) {
     write_rn(buf);
 }
 
-type DecodeResult = Result<Option<(usize, Response)>, Error>;
-
-fn decode(buf: &mut BytesMut, idx: usize) -> DecodeResult {
-    if buf.len() > idx {
-        match buf[idx] {
-            b'$' => decode_bytes(buf, idx + 1),
-            b'*' => decode_array(buf, idx + 1),
-            b':' => decode_integer(buf, idx + 1),
-            b'+' => decode_string(buf, idx + 1),
-            b'-' => decode_error(buf, idx + 1),
-            _ => Err(Error::Parse(format!("Unexpected byte: {}", buf[idx]))),
-        }
-    } else {
-        Ok(None)
-    }
-}
-
-fn decode_length(buf: &mut BytesMut, idx: usize) -> Result<Option<(usize, i64)>, Error> {
-    // length is encoded as a string, terminated by "\r\n"
-    let (pos, int_str) = if let Some(pos) = buf[idx..].windows(2).position(|w| w == b"\r\n") {
-        (idx + pos + 2, &buf[idx..idx + pos])
-    } else {
-        return Ok(None);
-    };
-
-    // int encoded as string
-    match btoi::btoi(int_str) {
-        Ok(int) => Ok(Some((pos, int))),
-        Err(_) => Err(Error::Parse(format!(
-            "Not an integer: {:?}",
-            &int_str[..cmp::min(int_str.len(), 10)]
-        ))),
-    }
-}
-
-fn decode_bytes(buf: &mut BytesMut, idx: usize) -> DecodeResult {
-    match decode_length(buf, idx)? {
-        Some((pos, -1)) => Ok(Some((pos, Response::Nil))),
-        Some((pos, size)) if size >= 0 => {
-            let size = size as usize;
-            let remaining = buf.len() - pos;
-            let required_bytes = size + 2;
-
-            if remaining < required_bytes {
-                return Ok(None);
-            }
-            buf.advance(pos);
-            Ok(Some((2, Response::Bytes(buf.split_to(size)))))
-        }
-        Some((_, size)) => Err(Error::Parse(format!("Invalid string size: {}", size))),
-        None => Ok(None),
-    }
-}
-
-fn is_array_ready_to_decode(
-    buf: &mut BytesMut,
-    idx: usize,
-    array_size: usize,
-) -> Result<(bool, usize), Error> {
-    let mut items: usize = 0;
+/// Finds the next `\r\n` starting at `idx`, returns position of `\r`
+fn find_crlf(buf: &[u8], idx: usize) -> Option<usize> {
     let mut pos = idx;
-
-    // counting beginning of array items in buffer by `\r\n<type>`
-    while let Some(new_pos) = buf[pos..].windows(2).position(|w| w.starts_with(b"\r\n")) {
-        if pos + new_pos + 2 >= buf.len() {
-            break;
-        }
-        pos += new_pos + 2;
-
-        items += match &buf[pos] {
-            // check nested array and calc it as item
-            b'*' => match decode_length(buf, pos) {
-                Ok(Some((_, -1))) => 1,
-                Ok(Some((p, size))) if size >= 0 => {
-                    let (ready, end_of_scan) = is_array_ready_to_decode(buf, p, size as usize)?;
-                    // nested array isn't ready
-                    if !ready {
-                        return Ok((false, end_of_scan));
-                    }
-                    pos = end_of_scan;
-                    1
-                }
-                Ok(Some((_, size))) => {
-                    return Err(Error::Parse(format!("Invalid array size: {}", size)));
-                }
-                _ => 0,
-            },
-            // array item found
-            b'$' | b':' | b'+' | b'-' => 1,
-            _ => 0,
-        };
-
-        if array_size <= items {
-            return Ok((true, pos));
+    while let Some(p) = buf.get(pos..)?.iter().position(|b| *b == b'\r') {
+        let p = pos + p;
+        match buf.get(p + 1) {
+            Some(b'\n') => return Some(p),
+            Some(_) => pos = p + 1,
+            None => return None,
         }
     }
-
-    Ok((array_size <= items, pos))
+    None
 }
 
-fn decode_array(buf: &mut BytesMut, idx: usize) -> DecodeResult {
-    match decode_length(buf, idx)? {
-        Some((pos, -1)) => Ok(Some((pos, Response::Nil))),
-        Some((pos, size)) if size >= 0 => {
-            let size = size as usize;
-
-            let (is_ready, _) = is_array_ready_to_decode(buf, idx, size)?;
-            if !is_ready {
-                return Ok(None);
-            }
-
-            let mut pos = pos;
-            let mut values = Vec::with_capacity(size);
-            for _ in 0..size {
-                match decode(buf, pos) {
-                    Ok(None) => return Ok(None),
-                    Ok(Some((new_pos, value))) => {
-                        values.push(value);
-                        pos = new_pos;
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-            Ok(Some((pos, Response::Array(values))))
-        }
-        Some((_, size)) => Err(Error::Parse(format!("Invalid array size: {}", size))),
-        None => Ok(None),
-    }
-}
-
-fn decode_integer(buf: &mut BytesMut, idx: usize) -> DecodeResult {
-    if let Some((pos, int)) = decode_length(buf, idx)? {
-        Ok(Some((pos, Response::Integer(int))))
-    } else {
-        Ok(None)
-    }
-}
-
-/// A simple string is any series of bytes that ends with `\r\n`
-fn decode_string(buf: &mut BytesMut, idx: usize) -> DecodeResult {
-    if let Some((pos, string)) = scan_string(buf, idx)? {
-        Ok(Some((pos, Response::String(string))))
-    } else {
-        Ok(None)
-    }
-}
-
-fn decode_error(buf: &mut BytesMut, idx: usize) -> DecodeResult {
-    if let Some((pos, string)) = scan_string(buf, idx)? {
-        Ok(Some((pos, Response::Error(string))))
-    } else {
-        Ok(None)
-    }
-}
-
-fn scan_string(buf: &mut BytesMut, idx: usize) -> Result<Option<(usize, ByteString)>, Error> {
-    if let Some(pos) = buf[idx..].windows(2).position(|w| w == b"\r\n") {
-        buf.advance(idx);
-        match ByteString::try_from(buf.split_to(pos)) {
-            Ok(s) => Ok(Some((2, s))),
+/// Parses `\r\n` terminated integer, returns position after `\r\n`
+fn parse_int(buf: &[u8], idx: usize) -> Result<Option<(usize, i64)>, Error> {
+    if let Some(p) = find_crlf(buf, idx) {
+        let int_str = &buf[idx..p];
+        match btoi::btoi(int_str) {
+            Ok(int) => Ok(Some((p + 2, int))),
             Err(_) => Err(Error::Parse(format!(
-                "Not a valid string: {:?}",
-                &buf[idx..idx + cmp::min(pos, 10)]
+                "Not an integer: {:?}",
+                &int_str[..cmp::min(int_str.len(), 10)]
             ))),
         }
     } else {
         Ok(None)
     }
+}
+
+/// Calculates length of the first complete frame in the buffer
+///
+/// Buffer is not modified, bulk string payloads are skipped by their length.
+fn frame_len(buf: &[u8]) -> Result<Option<usize>, Error> {
+    let mut pos = 0;
+    // number of values that are not scanned yet
+    let mut pending: usize = 1;
+
+    while pending > 0 {
+        pending -= 1;
+
+        let Some(&kind) = buf.get(pos) else {
+            return Ok(None);
+        };
+        match kind {
+            b'+' | b'-' | b':' => match find_crlf(buf, pos + 1) {
+                Some(p) => pos = p + 2,
+                None => return Ok(None),
+            },
+            b'$' => match parse_int(buf, pos + 1)? {
+                Some((p, -1)) => pos = p,
+                Some((p, size)) if size >= 0 => {
+                    let end = usize::try_from(size)
+                        .ok()
+                        .and_then(|size| p.checked_add(size)?.checked_add(2))
+                        .ok_or_else(|| Error::Parse(format!("Invalid string size: {size}")))?;
+                    if end > buf.len() {
+                        return Ok(None);
+                    }
+                    pos = end;
+                }
+                Some((_, size)) => {
+                    return Err(Error::Parse(format!("Invalid string size: {size}")));
+                }
+                None => return Ok(None),
+            },
+            b'*' => match parse_int(buf, pos + 1)? {
+                Some((p, -1)) => pos = p,
+                Some((p, size)) if size >= 0 => {
+                    pending = usize::try_from(size)
+                        .ok()
+                        .and_then(|size| pending.checked_add(size))
+                        .ok_or_else(|| Error::Parse(format!("Invalid array size: {size}")))?;
+                    pos = p;
+                }
+                Some((_, size)) => {
+                    return Err(Error::Parse(format!("Invalid array size: {size}")));
+                }
+                None => return Ok(None),
+            },
+            b => return Err(Error::Parse(format!("Unexpected byte: {b}"))),
+        }
+    }
+    Ok(Some(pos))
+}
+
+/// Decodes a value from the buffer that contains a complete frame
+fn decode_value(buf: &mut BytesMut) -> Result<Response, Error> {
+    let kind = buf[0];
+    buf.advance(1);
+
+    match kind {
+        b'$' => match read_int(buf)? {
+            -1 => Ok(Response::Nil),
+            size => {
+                let data = buf.split_to(size as usize);
+                if buf.starts_with(b"\r\n") {
+                    buf.advance(2);
+                    Ok(Response::Bytes(data))
+                } else {
+                    Err(Error::Parse("Bulk string is not terminated by CRLF".into()))
+                }
+            }
+        },
+        b'*' => match read_int(buf)? {
+            -1 => Ok(Response::Nil),
+            size => {
+                // frame is complete, so size is bounded by the buffer length
+                let mut values = Vec::with_capacity(size as usize);
+                for _ in 0..size {
+                    values.push(decode_value(buf)?);
+                }
+                Ok(Response::Array(values))
+            }
+        },
+        b':' => Ok(Response::Integer(read_int(buf)?)),
+        b'+' => Ok(Response::String(read_string(buf)?)),
+        b'-' => Ok(Response::Error(read_string(buf)?)),
+        b => Err(Error::Parse(format!("Unexpected byte: {b}"))),
+    }
+}
+
+fn read_int(buf: &mut BytesMut) -> Result<i64, Error> {
+    match parse_int(buf, 0)? {
+        Some((pos, int)) => {
+            buf.advance(pos);
+            Ok(int)
+        }
+        None => Err(Error::Parse("Incomplete frame".into())),
+    }
+}
+
+fn read_string(buf: &mut BytesMut) -> Result<ByteString, Error> {
+    let Some(pos) = find_crlf(buf, 0) else {
+        return Err(Error::Parse("Incomplete frame".into()));
+    };
+    let data = buf.split_to(pos);
+    buf.advance(2);
+    ByteString::try_from(data.clone()).map_err(|()| {
+        Error::Parse(format!(
+            "Not a valid string: {:?}",
+            &data[..cmp::min(data.len(), 10)]
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -870,6 +844,64 @@ mod tests {
                 Response::Array(vec![Response::Bytes(Bytes::from_static(b"a"))])
             ])]))
         );
+    }
+
+    #[test]
+    fn test_decode_partial() {
+        let data: &[u8] =
+            b"*2\r\n$1\r\na\r\n$5\r\nhe\r\n$\r\n*3\r\n:1\r\n*2\r\n+OK\r\n$-1\r\n-ERR e\r\n\
+                            *0\r\n*-1\r\n$0\r\n\r\n";
+        let expected = vec![
+            Response::Array(vec![
+                Response::Bytes(Bytes::from_static(b"a")),
+                Response::Bytes(Bytes::from_static(b"he\r\n$")),
+            ]),
+            Response::Array(vec![
+                Response::Integer(1),
+                Response::Array(vec![
+                    Response::String(ByteString::from_static("OK")),
+                    Response::Nil,
+                ]),
+                Response::Error(ByteString::from_static("ERR e")),
+            ]),
+            Response::Array(vec![]),
+            Response::Nil,
+            Response::Bytes(Bytes::new()),
+        ];
+
+        // feed data in chunks of every size
+        for chunk in 1..=data.len() {
+            let mut buf = BytesMut::new();
+            let mut items = Vec::new();
+            for part in data.chunks(chunk) {
+                buf.extend_from_slice(part);
+                while let Some(item) = Codec.decode(&mut buf).unwrap() {
+                    items.push(item);
+                }
+            }
+            assert!(buf.is_empty());
+            assert_eq!(items, expected, "chunk size {chunk}");
+        }
+    }
+
+    #[test]
+    fn test_decode_errors() {
+        for data in [
+            &b"!1\r\n"[..],
+            b"$x\r\n",
+            b"$-2\r\n",
+            b"*-2\r\n",
+            b"$1\r\nab\r\n",
+            b"+\xff\xfe\r\n",
+            b":12a\r\n",
+        ] {
+            let mut buf = BytesMut::copy_from_slice(data);
+            assert!(Codec.decode(&mut buf).is_err(), "{data:?}");
+        }
+
+        // huge array header does not allocate
+        let mut buf = BytesMut::copy_from_slice(b"*9223372036854775807\r\n:1\r\n");
+        assert_eq!(Codec.decode(&mut buf).unwrap(), None);
     }
 
     #[test]

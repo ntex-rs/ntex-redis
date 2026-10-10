@@ -247,6 +247,20 @@ async fn test_subscribe() {
         cmd::SubscribeItem::UnSubscribed(channel.clone())
     );
 
+    // unsub from all channels
+    pubsub.send(cmd::Subscribe(vec![&channel])).unwrap();
+    let message = pubsub.recv().await;
+    assert_eq!(
+        message.unwrap().unwrap(),
+        cmd::SubscribeItem::Subscribed(channel.clone())
+    );
+    pubsub.send(cmd::UnSubscribe::<&str>(None)).unwrap();
+    let message = pubsub.recv().await;
+    assert_eq!(
+        message.unwrap().unwrap(),
+        cmd::SubscribeItem::UnSubscribed(channel.clone())
+    );
+
     // back to client state
     let client = pubsub.into_client();
     client.exec(cmd::Reset()).await.unwrap();
