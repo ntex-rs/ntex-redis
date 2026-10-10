@@ -1,7 +1,7 @@
 //! Redis commands
 #![allow(non_snake_case, clippy::wrong_self_convention)]
 
-use super::codec::{Response, Writer};
+use super::codec::{Frame, Writer};
 use super::errors::CommandError;
 
 mod auth;
@@ -31,7 +31,7 @@ pub use self::strings::{Get, IncrBy, Set};
 /// to add commands that are not provided by this crate.
 ///
 /// ```rust
-/// use ntex_redis::{cmd::Command, codec::{Response, Writer}, errors::CommandError};
+/// use ntex_redis::{cmd::Command, codec::{Frame, Writer}, errors::CommandError};
 ///
 /// /// STRLEN redis command
 /// struct StrLen(String);
@@ -43,11 +43,8 @@ pub use self::strings::{Get, IncrBy, Set};
 ///         w.args(("STRLEN", self.0));
 ///     }
 ///
-///     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-///         match val {
-///             Response::Integer(val) => Ok(val),
-///             _ => Err(CommandError::Output("Cannot parse response", val)),
-///         }
+///     fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+///         frame.int()
 ///     }
 /// }
 /// ```
@@ -60,8 +57,11 @@ pub trait Command {
     /// The request must be a single array of bulk strings, see [`Writer`].
     fn encode(self, w: &mut Writer<'_>);
 
-    /// Create command response from a redis response
-    fn to_output(val: Response) -> Result<Self::Output, CommandError>;
+    /// Decode command output from the response frame
+    ///
+    /// Redis error responses are returned as [`CommandError::Error`]
+    /// before `decode` is called.
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError>;
 }
 
 pub mod commands {

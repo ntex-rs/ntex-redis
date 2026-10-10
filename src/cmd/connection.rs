@@ -1,7 +1,7 @@
 use ntex_bytes::ByteString;
 
 use super::{Command, CommandError};
-use crate::codec::{Response, Writer};
+use crate::codec::{Frame, Writer};
 
 /// SELECT redis command
 ///
@@ -37,11 +37,8 @@ impl Command for SelectCommand {
         w.args(("SELECT", self.0));
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::String(val) => Ok(val == "OK"),
-            _ => Ok(false),
-        }
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        Ok(frame.peek()? == b'+' && frame.string()? == "OK")
     }
 }
 
@@ -79,12 +76,8 @@ impl Command for PingCommand {
         w.args(("PING",));
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::String(val) => Ok(val),
-            Response::Error(val) => Err(CommandError::Error(val)),
-            _ => Err(CommandError::Output("Unknown response", val)),
-        }
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        frame.string()
     }
 }
 
@@ -121,11 +114,7 @@ impl Command for ResetCommand {
         w.args(("RESET",));
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::String(val) => Ok(val),
-            Response::Error(val) => Err(CommandError::Error(val)),
-            _ => Err(CommandError::Output("Unknown response", val)),
-        }
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        frame.string()
     }
 }

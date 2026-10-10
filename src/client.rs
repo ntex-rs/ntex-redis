@@ -6,10 +6,12 @@ use ntex_service::{Ctx, Service};
 use ntex_util::channel::pool;
 
 use super::cmd::Command;
-use super::codec::{Codec, Request, Response, Writer};
+use ntex_bytes::Bytes;
+
+use super::codec::{Codec, Frame, FrameCodec, Request, Response, Writer};
 use super::errors::{CommandError, Error};
 
-type Queue = Rc<RefCell<VecDeque<pool::Sender<Result<Response, Error>>>>>;
+type Queue = Rc<RefCell<VecDeque<pool::Sender<Result<Bytes, Error>>>>>;
 
 /// Shared redis client
 ///
@@ -22,7 +24,7 @@ type Queue = Rc<RefCell<VecDeque<pool::Sender<Result<Response, Error>>>>>;
 pub struct Client {
     io: IoRef,
     queue: Queue,
-    pool: pool::Pool<Result<Response, Error>>,
+    pool: pool::Pool<Result<Bytes, Error>>,
 }
 
 impl Client {
@@ -35,7 +37,7 @@ impl Client {
         ntex_util::spawn(async move {
             poll_fn(|cx| {
                 loop {
-                    match ready!(io.poll_recv(&Codec, cx)) {
+                    match ready!(io.poll_recv(&FrameCodec, cx)) {
                         Ok(item) => {
                             if let Some(tx) = queue2.borrow_mut().pop_front() {
                                 let _ = tx.send(Ok(item));
@@ -90,7 +92,7 @@ impl Client {
             self.send(|io| io.with_write_src(|buf| cmd.encode(&mut Writer::new(buf))))
                 .await
                 .map_err(CommandError::Protocol)
-                .and_then(|res| T::to_output(res.into_result().map_err(CommandError::Error)?))
+                .and_then(|frame| Frame::new(frame).decode::<T>())
         }
     }
 
@@ -107,10 +109,11 @@ impl Client {
     }
 
     async fn _call(&self, req: Request) -> Result<Response, Error> {
-        self.send(|io| io.encode(req, &Codec)).await
+        let frame = self.send(|io| io.encode(req, &Codec)).await?;
+        Frame::new(frame).read_value()
     }
 
-    async fn send<F, E>(&self, f: F) -> Result<Response, Error>
+    async fn send<F, E>(&self, f: F) -> Result<Bytes, Error>
     where
         F: FnOnce(&IoRef) -> Result<(), E>,
         Error: From<E>,

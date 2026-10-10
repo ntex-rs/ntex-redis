@@ -1,5 +1,5 @@
 use super::{Command, CommandError};
-use crate::codec::{Arg, Response, Writer};
+use crate::codec::{Arg, Frame, Writer};
 
 /// AUTH redis command
 ///
@@ -21,10 +21,7 @@ impl<T: Arg> Command for AuthCommand<T> {
         w.args(("AUTH", self.0));
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::String(val) => Ok(val == "OK"),
-            _ => Ok(false),
-        }
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        Ok(frame.peek()? == b'+' && frame.string()? == "OK")
     }
 }

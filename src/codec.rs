@@ -1,11 +1,14 @@
 //! Redis protocol codec
 use std::{cmp, collections::HashMap, convert::TryFrom, hash::BuildHasher, hash::Hash, str};
 
-use ntex_bytes::{Buf, BufMut, BytePageSize, BytePages, ByteString, Bytes, BytesMut};
+use ntex_bytes::{BufMut, BytePageSize, BytePages, ByteString, Bytes, BytesMut};
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::hash_map::HashMap as HashbrownMap;
 
-use super::errors::Error;
+use super::{
+    cmd::Command,
+    errors::{CommandError, Error},
+};
 
 /// Codec to read/write redis values
 pub struct Codec;
@@ -316,12 +319,249 @@ impl Decoder for Codec {
     type Error = Error;
 
     fn decode(&self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if frame_len(buf)?.is_some() {
-            decode_value(buf).map(Some)
+        if let Some(len) = frame_len(buf)? {
+            Frame::new(buf.split_to(len)).read_value().map(Some)
         } else {
             Ok(None)
         }
     }
+}
+
+/// Decoder that splits complete response frames from the read buffer
+pub(crate) struct FrameCodec;
+
+impl Decoder for FrameCodec {
+    type Item = Bytes;
+    type Error = Error;
+
+    fn decode(&self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        Ok(frame_len(buf)?.map(|len| buf.split_to(len)))
+    }
+}
+
+/// Redis response reader
+///
+/// Frame holds one complete redis response, values are read sequentially
+/// with typed readers, see [`Command::decode`].
+///
+/// Typed readers return [`CommandError::Error`] for redis error values and
+/// [`CommandError::Output`] with the whole response if the value has
+/// an unexpected type. Both nil forms, `$-1` and `*-1`, are accepted
+/// as nil by [`bulk`](Frame::bulk) and [`array`](Frame::array).
+#[derive(Debug, Clone)]
+pub struct Frame {
+    buf: Bytes,
+    pos: usize,
+}
+
+impl Frame {
+    /// Create reader for a response frame
+    #[inline]
+    pub fn new(buf: Bytes) -> Self {
+        Frame { buf, pos: 0 }
+    }
+
+    /// Returns true if the next value is nil
+    #[inline]
+    pub fn is_nil(&self) -> bool {
+        matches!(self.buf.get(self.pos), Some(b'$' | b'*'))
+            && self.buf.get(self.pos + 1..self.pos + 3) == Some(b"-1")
+    }
+
+    /// Read integer value
+    #[inline]
+    pub fn int(&mut self) -> Result<i64, CommandError> {
+        match self.peek()? {
+            b':' => Ok(self.header()?),
+            b'-' => Err(self.read_error()),
+            _ => Err(self.unexpected("Not an integer")),
+        }
+    }
+
+    /// Read bulk string value, returns `None` for nil
+    #[inline]
+    pub fn bulk(&mut self) -> Result<Option<Bytes>, CommandError> {
+        match self.peek()? {
+            b'$' => match self.header()? {
+                -1 => Ok(None),
+                size => Ok(Some(self.read_bulk(size)?)),
+            },
+            b'*' if self.is_nil() => {
+                self.header()?;
+                Ok(None)
+            }
+            b'-' => Err(self.read_error()),
+            _ => Err(self.unexpected("Not a bytes object")),
+        }
+    }
+
+    /// Read non-nil bulk string value
+    #[inline]
+    pub fn bytes(&mut self) -> Result<Bytes, CommandError> {
+        match self.peek()? {
+            b'$' => match self.header()? {
+                -1 => Err(self.unexpected("Not a bytes object")),
+                size => Ok(self.read_bulk(size)?),
+            },
+            b'-' => Err(self.read_error()),
+            _ => Err(self.unexpected("Not a bytes object")),
+        }
+    }
+
+    /// Read simple string or utf-8 bulk string value
+    #[inline]
+    pub fn string(&mut self) -> Result<ByteString, CommandError> {
+        match self.peek()? {
+            b'+' => Ok(to_string(self.read_line()?)?),
+            b'$' => match self.header()? {
+                -1 => Err(self.unexpected("Cannot convert into a string")),
+                size => {
+                    let data = self.read_bulk(size)?;
+                    ByteString::try_from(data)
+                        .map_err(|()| self.unexpected("Cannot convert into a string"))
+                }
+            },
+            b'-' => Err(self.read_error()),
+            _ => Err(self.unexpected("Cannot convert into a string")),
+        }
+    }
+
+    /// Read array header, returns number of elements or `None` for nil
+    ///
+    /// Array elements must be read after the header.
+    #[inline]
+    pub fn array(&mut self) -> Result<Option<usize>, CommandError> {
+        match self.peek()? {
+            b'*' => match self.header()? {
+                -1 => Ok(None),
+                size => Ok(Some(self.array_size(size)?)),
+            },
+            b'$' if self.is_nil() => {
+                self.header()?;
+                Ok(None)
+            }
+            b'-' => Err(self.read_error()),
+            _ => Err(self.unexpected("Not an array")),
+        }
+    }
+
+    /// Read any value
+    ///
+    /// Redis error values are returned as [`Response::Error`].
+    pub fn value(&mut self) -> Result<Response, CommandError> {
+        Ok(self.read_value()?)
+    }
+
+    /// Create [`CommandError::Output`] error with the whole response
+    pub fn unexpected(&self, msg: &'static str) -> CommandError {
+        let val = Frame::new(self.buf.clone())
+            .read_value()
+            .unwrap_or(Response::Nil);
+        CommandError::Output(msg, val)
+    }
+
+    /// Decode command output, redis error response is returned as [`CommandError::Error`]
+    pub(crate) fn decode<T: Command>(mut self) -> Result<T::Output, CommandError> {
+        match self.peek()? {
+            b'-' => Err(self.read_error()),
+            _ => T::decode(&mut self),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn peek(&self) -> Result<u8, Error> {
+        self.buf.get(self.pos).copied().ok_or_else(incomplete)
+    }
+
+    /// Reads error value as [`CommandError::Error`]
+    pub(crate) fn read_error(&mut self) -> CommandError {
+        match self.read_line().and_then(to_string) {
+            Ok(err) => CommandError::Error(err),
+            Err(err) => err.into(),
+        }
+    }
+
+    pub(crate) fn read_value(&mut self) -> Result<Response, Error> {
+        match self.peek()? {
+            b'$' => match self.header()? {
+                -1 => Ok(Response::Nil),
+                size => Ok(Response::Bytes(self.read_bulk(size)?)),
+            },
+            b'*' => match self.header()? {
+                -1 => Ok(Response::Nil),
+                size => {
+                    let size = self.array_size(size)?;
+                    let mut values = Vec::with_capacity(size);
+                    for _ in 0..size {
+                        values.push(self.read_value()?);
+                    }
+                    Ok(Response::Array(values))
+                }
+            },
+            b':' => Ok(Response::Integer(self.header()?)),
+            b'+' => Ok(Response::String(to_string(self.read_line()?)?)),
+            b'-' => Ok(Response::Error(to_string(self.read_line()?)?)),
+            b => Err(Error::Parse(format!("Unexpected byte: {b}"))),
+        }
+    }
+
+    /// Reads integer after the type byte
+    #[inline]
+    fn header(&mut self) -> Result<i64, Error> {
+        let (pos, val) = parse_int(&self.buf, self.pos + 1)?.ok_or_else(incomplete)?;
+        self.pos = pos;
+        Ok(val)
+    }
+
+    /// Validates array size, every element takes at least 3 bytes
+    #[inline]
+    fn array_size(&self, size: i64) -> Result<usize, Error> {
+        usize::try_from(size)
+            .ok()
+            .filter(|size| *size <= (self.buf.len() - self.pos) / 3)
+            .ok_or_else(|| Error::Parse(format!("Invalid array size: {size}")))
+    }
+
+    /// Reads line after the type byte
+    #[inline]
+    fn read_line(&mut self) -> Result<Bytes, Error> {
+        let start = self.pos + 1;
+        let end = find_crlf(&self.buf, start).ok_or_else(incomplete)?;
+        self.pos = end + 2;
+        Ok(self.buf.slice(start..end))
+    }
+
+    /// Reads bulk string payload of `size` bytes
+    #[inline]
+    fn read_bulk(&mut self, size: i64) -> Result<Bytes, Error> {
+        let start = self.pos;
+        let end = usize::try_from(size)
+            .ok()
+            .and_then(|size| start.checked_add(size))
+            .filter(|end| *end < usize::MAX - 2)
+            .ok_or_else(|| Error::Parse(format!("Invalid string size: {size}")))?;
+        match self.buf.get(end..end + 2) {
+            Some(b"\r\n") => {
+                self.pos = end + 2;
+                Ok(self.buf.slice(start..end))
+            }
+            Some(_) => Err(Error::Parse("Bulk string is not terminated by CRLF".into())),
+            None => Err(incomplete()),
+        }
+    }
+}
+
+fn incomplete() -> Error {
+    Error::Parse("Incomplete frame".into())
+}
+
+fn to_string(data: Bytes) -> Result<ByteString, Error> {
+    ByteString::try_from(&data).map_err(|()| {
+        Error::Parse(format!(
+            "Not a valid string: {:?}",
+            &data[..cmp::min(data.len(), 10)]
+        ))
+    })
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -901,66 +1141,6 @@ fn frame_len(buf: &[u8]) -> Result<Option<usize>, Error> {
     Ok(Some(pos))
 }
 
-/// Decodes a value from the buffer that contains a complete frame
-fn decode_value(buf: &mut BytesMut) -> Result<Response, Error> {
-    let kind = buf[0];
-    buf.advance(1);
-
-    match kind {
-        b'$' => match read_int(buf)? {
-            -1 => Ok(Response::Nil),
-            size => {
-                let data = buf.split_to(size as usize);
-                if buf.starts_with(b"\r\n") {
-                    buf.advance(2);
-                    Ok(Response::Bytes(data))
-                } else {
-                    Err(Error::Parse("Bulk string is not terminated by CRLF".into()))
-                }
-            }
-        },
-        b'*' => match read_int(buf)? {
-            -1 => Ok(Response::Nil),
-            size => {
-                // frame is complete, so size is bounded by the buffer length
-                let mut values = Vec::with_capacity(size as usize);
-                for _ in 0..size {
-                    values.push(decode_value(buf)?);
-                }
-                Ok(Response::Array(values))
-            }
-        },
-        b':' => Ok(Response::Integer(read_int(buf)?)),
-        b'+' => Ok(Response::String(read_string(buf)?)),
-        b'-' => Ok(Response::Error(read_string(buf)?)),
-        b => Err(Error::Parse(format!("Unexpected byte: {b}"))),
-    }
-}
-
-fn read_int(buf: &mut BytesMut) -> Result<i64, Error> {
-    match parse_int(buf, 0)? {
-        Some((pos, int)) => {
-            buf.advance(pos);
-            Ok(int)
-        }
-        None => Err(Error::Parse("Incomplete frame".into())),
-    }
-}
-
-fn read_string(buf: &mut BytesMut) -> Result<ByteString, Error> {
-    let Some(pos) = find_crlf(buf, 0) else {
-        return Err(Error::Parse("Incomplete frame".into()));
-    };
-    let data = buf.split_to(pos);
-    buf.advance(2);
-    ByteString::try_from(data.clone()).map_err(|()| {
-        Error::Parse(format!(
-            "Not a valid string: {:?}",
-            &data[..cmp::min(data.len(), 10)]
-        ))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::convert::TryFrom;
@@ -1360,5 +1540,186 @@ mod tests {
             write_bytes(|w| empty.write(w)),
             b"*1\r\n$11\r\nUNSUBSCRIBE\r\n".as_ref()
         );
+    }
+
+    fn frame(data: &'static [u8]) -> Frame {
+        Frame::new(Bytes::from_static(data))
+    }
+
+    #[test]
+    fn test_frame_readers() {
+        assert_eq!(frame(b":-12\r\n").int().unwrap(), -12);
+        assert_eq!(
+            frame(b"$3\r\nabc\r\n").bulk().unwrap(),
+            Some(Bytes::from_static(b"abc"))
+        );
+        assert_eq!(frame(b"$0\r\n\r\n").bytes().unwrap(), Bytes::new());
+        assert_eq!(frame(b"$-1\r\n").bulk().unwrap(), None);
+        assert_eq!(frame(b"*-1\r\n").bulk().unwrap(), None);
+        assert_eq!(frame(b"$-1\r\n").array().unwrap(), None);
+        assert_eq!(frame(b"*-1\r\n").array().unwrap(), None);
+        assert!(frame(b"$-1\r\n").is_nil());
+        assert!(frame(b"*-1\r\n").is_nil());
+        assert!(!frame(b"*0\r\n").is_nil());
+        assert_eq!(frame(b"+OK\r\n").string().unwrap(), "OK");
+        assert_eq!(frame(b"$2\r\nok\r\n").string().unwrap(), "ok");
+
+        let mut f = frame(b"*3\r\n$1\r\na\r\n:1\r\n*2\r\n+x\r\n$-1\r\n");
+        assert_eq!(f.array().unwrap(), Some(3));
+        assert_eq!(f.bytes().unwrap(), Bytes::from_static(b"a"));
+        assert_eq!(f.int().unwrap(), 1);
+        assert_eq!(
+            f.value().unwrap(),
+            Response::Array(vec![Response::String("x".into()), Response::Nil])
+        );
+        assert!(matches!(f.int(), Err(CommandError::Protocol(_))));
+    }
+
+    #[test]
+    fn test_frame_errors() {
+        // redis errors
+        let mut f = frame(b"*2\r\n-ERR one\r\n:1\r\n");
+        assert_eq!(f.array().unwrap(), Some(2));
+        assert!(matches!(f.int(), Err(CommandError::Error(e)) if e == "ERR one"));
+        assert!(matches!(
+            frame(b"-ERR two\r\n").decode::<crate::cmd::commands::KeysCommand>(),
+            Err(CommandError::Error(e)) if e == "ERR two"
+        ));
+        assert_eq!(
+            frame(b"-ERR\r\n").value().unwrap(),
+            Response::Error("ERR".into())
+        );
+
+        // type mismatch returns the whole response
+        let mut f = frame(b"*2\r\n:1\r\n:2\r\n");
+        assert_eq!(f.array().unwrap(), Some(2));
+        match f.bytes() {
+            Err(CommandError::Output(_, val)) => {
+                assert_eq!(
+                    val,
+                    Response::Array(vec![Response::Integer(1), Response::Integer(2)])
+                );
+            }
+            res => panic!("{res:?}"),
+        }
+        assert!(matches!(
+            frame(b"$-1\r\n").bytes(),
+            Err(CommandError::Output(_, Response::Nil))
+        ));
+        assert!(matches!(
+            frame(b"$1\r\n\xff\r\n").string(),
+            Err(CommandError::Output(..))
+        ));
+
+        // protocol errors
+        assert!(matches!(frame(b"").int(), Err(CommandError::Protocol(_))));
+        assert!(matches!(frame(b":1").int(), Err(CommandError::Protocol(_))));
+        assert!(matches!(
+            frame(b"$3\r\nab\r\n").bulk(),
+            Err(CommandError::Protocol(_))
+        ));
+        assert!(matches!(
+            frame(b"$-2\r\n").bulk(),
+            Err(CommandError::Protocol(_))
+        ));
+        assert!(matches!(
+            frame(b"*100\r\n:1\r\n").array(),
+            Err(CommandError::Protocol(_))
+        ));
+        assert!(matches!(
+            frame(b"+\xff\r\n").string(),
+            Err(CommandError::Protocol(_))
+        ));
+        assert!(matches!(
+            frame(b"*1\r\n?\r\n").value(),
+            Err(CommandError::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn test_frame_codec() {
+        let mut buf = BytesMut::from(&b"+OK\r\n*2\r\n$1\r\na\r\n:1"[..]);
+        assert_eq!(
+            FrameCodec.decode(&mut buf).unwrap().unwrap(),
+            b"+OK\r\n".as_ref()
+        );
+        assert!(FrameCodec.decode(&mut buf).unwrap().is_none());
+        buf.extend_from_slice(b"\r\n");
+        assert_eq!(
+            FrameCodec.decode(&mut buf).unwrap().unwrap(),
+            b"*2\r\n$1\r\na\r\n:1\r\n".as_ref()
+        );
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_command_decode() {
+        use crate::cmd::{SubscribeItem, TtlResult, commands::*};
+
+        type SetCmd = SetCommand<&'static str, &'static str>;
+        assert!(frame(b"+OK\r\n").decode::<SetCmd>().unwrap());
+        assert!(!frame(b"$-1\r\n").decode::<SetCmd>().unwrap());
+        assert!(matches!(
+            frame(b"+QUEUED\r\n").decode::<SetCmd>(),
+            Err(CommandError::Output(_, Response::String(_)))
+        ));
+        assert!(frame(b"+OK\r\n").decode::<SelectCommand>().unwrap());
+        assert!(!frame(b":1\r\n").decode::<SelectCommand>().unwrap());
+        assert_eq!(
+            frame(b"$4\r\nPONG\r\n").decode::<PingCommand>().unwrap(),
+            "PONG"
+        );
+
+        type BoolCmd = BoolOutputCommand<(&'static str,)>;
+        assert!(frame(b":1\r\n").decode::<BoolCmd>().unwrap());
+        assert!(matches!(
+            frame(b":2\r\n").decode::<BoolCmd>(),
+            Err(CommandError::Output(_, Response::Integer(2)))
+        ));
+        assert_eq!(
+            frame(b":-1\r\n").decode::<TtlCommand<&str>>().unwrap(),
+            TtlResult::NoExpire
+        );
+        assert_eq!(
+            frame(b"*2\r\n$1\r\na\r\n+b\r\n")
+                .decode::<KeysPatternCommand<&str>>()
+                .unwrap(),
+            vec![ByteString::from("a"), ByteString::from("b")]
+        );
+
+        let map = frame(b"*4\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n$1\r\n2\r\n")
+            .decode::<HGetAllCommand<&str>>()
+            .unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map[&Bytes::from_static(b"b")], Bytes::from_static(b"2"));
+        assert!(matches!(
+            frame(b"*1\r\n$1\r\na\r\n").decode::<HGetAllCommand<&str>>(),
+            Err(CommandError::Output(..))
+        ));
+
+        assert_eq!(
+            frame(b"*3\r\n$9\r\nsubscribe\r\n$2\r\nch\r\n:1\r\n")
+                .decode::<SubscribeOutputCommand>()
+                .unwrap(),
+            SubscribeItem::Subscribed(Bytes::from_static(b"ch"))
+        );
+        assert_eq!(
+            frame(b"*4\r\n$8\r\npmessage\r\n$2\r\nc*\r\n$2\r\nch\r\n$3\r\nmsg\r\n")
+                .decode::<SubscribeOutputCommand>()
+                .unwrap(),
+            SubscribeItem::Message {
+                pattern: Some(Bytes::from_static(b"c*")),
+                channel: Bytes::from_static(b"ch"),
+                payload: Bytes::from_static(b"msg"),
+            }
+        );
+        assert!(matches!(
+            frame(b"*3\r\n$7\r\nmessage\r\n$2\r\nch\r\n:1\r\n").decode::<SubscribeOutputCommand>(),
+            Err(CommandError::Output(..))
+        ));
+        assert!(matches!(
+            frame(b"*3\r\n$3\r\nfoo\r\n$2\r\nch\r\n:1\r\n").decode::<SubscribeOutputCommand>(),
+            Err(CommandError::Output(..))
+        ));
     }
 }

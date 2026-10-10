@@ -28,6 +28,10 @@
 
 * Add `codec::Writer`, `codec::Arg` and `codec::Args`, command arguments accept `Arg` types instead of `BulkString: From<T>`
 
+* `Command::to_output()` replaced with `Command::decode()`, responses are decoded directly into command outputs without intermediate `Response` values
+
+* Add `codec::Frame` response reader
+
 * `Client::exec()` and `SimpleClient::send()` report write errors
 
 * Avoid string allocation for integer arguments of `IncrBy`, `HIncrBy`, `Expire` and `ExpireAt`

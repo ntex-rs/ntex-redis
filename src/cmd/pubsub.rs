@@ -3,7 +3,7 @@ use ntex_bytes::Bytes;
 use ntex_util::future::Either;
 use std::convert::TryFrom;
 
-use crate::codec::{Arg, ArgList, Response, Writer};
+use crate::codec::{Arg, ArgList, Frame, Response, Writer};
 
 const TYPE_SUBSCRIBE: Bytes = Bytes::from_static(b"subscribe");
 const TYPE_UNSUBSCRIBE: Bytes = Bytes::from_static(b"unsubscribe");
@@ -116,6 +116,35 @@ impl TryFrom<Response> for SubscribeItem {
     }
 }
 
+impl SubscribeItem {
+    fn decode(frame: &mut Frame) -> Result<Self, CommandError> {
+        let len = match frame.array()? {
+            Some(len @ (3 | 4)) => len,
+            _ => return Err(frame.unexpected("Array needs to be 3 or 4 elements")),
+        };
+        let mtype = frame.bytes()?;
+        let pattern = if len == 4 { Some(frame.bytes()?) } else { None };
+        let channel = frame.bytes()?;
+
+        match &mtype {
+            s if s == &TYPE_SUBSCRIBE || s == &TYPE_SSUBSCRIBE || s == &TYPE_PSUBSCRIBE => {
+                Ok(SubscribeItem::Subscribed(channel))
+            }
+            s if s == &TYPE_UNSUBSCRIBE || s == &TYPE_SUNSUBSCRIBE || s == &TYPE_PUNSUBSCRIBE => {
+                Ok(SubscribeItem::UnSubscribed(channel))
+            }
+            s if s == &TYPE_MESSAGE || s == &TYPE_SMESSAGE || s == &TYPE_PMESSAGE => {
+                Ok(SubscribeItem::Message {
+                    pattern,
+                    channel,
+                    payload: frame.bytes()?,
+                })
+            }
+            _ => Err(frame.unexpected("Subscription message type unknown")),
+        }
+    }
+}
+
 /// SUBSCRIBE, SSUBSCRIBE and PSUBSCRIBE command, see [`Subscribe`]
 pub struct SubscribeOutputCommand(pub(crate) ArgList);
 
@@ -126,8 +155,8 @@ impl Command for SubscribeOutputCommand {
         self.0.write(w);
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        SubscribeItem::try_from(val)
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        SubscribeItem::decode(frame)
     }
 }
 
@@ -141,8 +170,8 @@ impl Command for UnSubscribeOutputCommand {
         self.0.write(w);
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        SubscribeItem::try_from(val)
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        SubscribeItem::decode(frame)
     }
 }
 
