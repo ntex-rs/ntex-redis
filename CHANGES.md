@@ -22,6 +22,8 @@
 
 * Fix `UnSubscribe(None)`, `SUnSubscribe(None)` and `PUnSubscribe(None)` requests
 
+* Fix `Client::flushdb()` desyncing responses, non-array requests are sent as an array
+
 * Avoid string allocation for integer arguments of `IncrBy`, `HIncrBy`, `Expire` and `ExpireAt`
 
 * Export `SelectCommand`, `PingCommand`, `ResetCommand`, `BoolOutputCommand` and

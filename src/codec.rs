@@ -15,41 +15,47 @@ impl Encoder for Codec {
     type Error = Error;
 
     fn encode(&self, msg: Request, buf: &mut BytePages) -> Result<(), Self::Error> {
-        match msg {
-            Request::Array(ary) => {
-                write_header(b'*', ary.len() as i64, buf);
-                for v in ary {
-                    self.encode(v, buf)?;
-                }
-            }
-            Request::BulkString(bstr) => {
-                let len = bstr.0.len();
-                write_header(b'$', len as i64, buf);
-                buf.append(bstr.0);
-                write_rn(buf);
-            }
-            Request::BulkStatic(bstr) => {
-                let len = bstr.len();
-                write_header(b'$', len as i64, buf);
-                buf.append(Bytes::from_static(bstr));
-                write_rn(buf);
-            }
-            Request::BulkInteger(i) => {
-                let mut buffer = itoa::Buffer::new();
-                let rendered = buffer.format(i);
-                write_header(b'$', rendered.len() as i64, buf);
-                buf.extend_from_slice(rendered.as_bytes());
-                write_rn(buf);
-            }
-            Request::String(ref string) => {
-                write_string(b'+', string, buf);
-            }
-            Request::Integer(val) => {
-                // Simple integer are just the header
-                write_header(b':', val, buf);
+        // redis commands are always sent as an array
+        if !matches!(msg, Request::Array(_)) {
+            write_header(b'*', 1, buf);
+        }
+        encode_value(msg, buf);
+        Ok(())
+    }
+}
+
+fn encode_value(msg: Request, buf: &mut BytePages) {
+    match msg {
+        Request::Array(ary) => {
+            write_header(b'*', ary.len() as i64, buf);
+            for v in ary {
+                encode_value(v, buf);
             }
         }
-        Ok(())
+        Request::BulkString(bstr) => {
+            write_header(b'$', bstr.0.len() as i64, buf);
+            buf.append(bstr.0);
+            write_rn(buf);
+        }
+        Request::BulkStatic(bstr) => {
+            write_header(b'$', bstr.len() as i64, buf);
+            buf.append(Bytes::from_static(bstr));
+            write_rn(buf);
+        }
+        Request::BulkInteger(i) => {
+            let mut buffer = itoa::Buffer::new();
+            let rendered = buffer.format(i);
+            write_header(b'$', rendered.len() as i64, buf);
+            buf.extend_from_slice(rendered.as_bytes());
+            write_rn(buf);
+        }
+        Request::String(ref string) => {
+            write_string(b'+', string, buf);
+        }
+        Request::Integer(val) => {
+            // Simple integer are just the header
+            write_header(b':', val, buf);
+        }
     }
 }
 
@@ -539,10 +545,15 @@ fn write_rn(buf: &mut BytePages) {
 
 fn write_header(symb: u8, len: i64, buf: &mut BytePages) {
     let mut len_buf = itoa::Buffer::new();
-    let rendered = len_buf.format(len);
-    buf.put_u8(symb);
-    buf.extend_from_slice(rendered.as_bytes());
-    write_rn(buf);
+    let rendered = len_buf.format(len).as_bytes();
+
+    // symbol, at most 20 digits and CRLF
+    let mut header = [0u8; 23];
+    let end = rendered.len() + 3;
+    header[0] = symb;
+    header[1..end - 2].copy_from_slice(rendered);
+    header[end - 2..end].copy_from_slice(b"\r\n");
+    buf.extend_from_slice(&header[..end]);
 }
 
 fn write_string(symb: u8, string: &str, buf: &mut BytePages) {
@@ -739,14 +750,27 @@ mod tests {
 
     #[test]
     fn test_bulk_string() {
+        // non-array request is sent as single element array
         let req_object = Request::BulkString(Bytes::from_static(b"THISISATEST").into());
-        let mut bytes = BytesMut::copy_from_slice(obj_to_bytes(req_object));
-        let codec = Codec;
-        assert_eq!(b"$11\r\nTHISISATEST\r\n".to_vec(), bytes.to_vec());
+        let bytes = obj_to_bytes(req_object);
+        assert_eq!(bytes, b"*1\r\n$11\r\nTHISISATEST\r\n".as_ref());
 
+        let mut bytes = BytesMut::copy_from_slice(b"$11\r\nTHISISATEST\r\n");
         let resp_object = Response::Bytes(Bytes::from_static(b"THISISATEST"));
-        let deserialized = codec.decode(&mut bytes).unwrap().unwrap();
+        let deserialized = Codec.decode(&mut bytes).unwrap().unwrap();
         assert_eq!(deserialized, resp_object);
+
+        let bytes = obj_to_bytes(Request::from_static("PING"));
+        assert_eq!(bytes, b"*1\r\n$4\r\nPING\r\n".as_ref());
+
+        let bytes = obj_to_bytes(Request::Integer(i64::MIN));
+        assert_eq!(bytes, b"*1\r\n:-9223372036854775808\r\n".as_ref());
+
+        let bytes = obj_to_bytes(array!["INCRBY", "key"].add(Request::BulkInteger(-15)));
+        assert_eq!(
+            bytes,
+            b"*3\r\n$6\r\nINCRBY\r\n$3\r\nkey\r\n$3\r\n-15\r\n".as_ref()
+        );
     }
 
     #[test]
@@ -760,7 +784,7 @@ mod tests {
 
         let data = &*Vec::leak(vec![b'y'; 8 * 1024]);
         let bytes = obj_to_bytes(Request::BulkStatic(data));
-        let mut expected = b"$8192\r\n".to_vec();
+        let mut expected = b"*1\r\n$8192\r\n".to_vec();
         expected.extend_from_slice(data);
         expected.extend_from_slice(b"\r\n");
         assert_eq!(bytes, &expected[..]);

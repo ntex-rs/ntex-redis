@@ -203,6 +203,22 @@ async fn test_connection() {
 }
 
 #[ntex::test]
+async fn test_flushdb() {
+    let redis = connect().await;
+    assert!(redis.exec(cmd::Select(15)).await.unwrap());
+
+    let key = new_key();
+    redis.exec(cmd::Set(&key, "value")).await.unwrap();
+    redis.flushdb().await.unwrap();
+
+    // client stays in sync after flushdb
+    let result = redis.exec(cmd::Get(&key)).await.unwrap();
+    assert_eq!(result, None);
+    let result = redis.exec(cmd::Ping()).await.unwrap();
+    assert_eq!(result, "PONG");
+}
+
+#[ntex::test]
 async fn test_subscribe() {
     let key = new_key();
     let channel = Bytes::from(key);
