@@ -4,7 +4,8 @@ use ntex_io::IoBoxed;
 use ntex_net::connect::{self, Address, Connect, Connector};
 use ntex_service::{IntoService, Service, cfg::SharedCfg, pipeline::PipelineState};
 
-use super::{Client, SimpleClient, cmd, errors::ConnectError};
+use super::errors::{CommandError, ConnectError};
+use super::{Client, SimpleClient, cmd};
 
 type ConnectorPipeline<A> =
     PipelineState<SharedCfg, Connect<A>, IoBoxed, Error<connect::ConnectError>>;
@@ -95,8 +96,11 @@ where
             let client = SimpleClient::new(io);
 
             for password in &self.passwords {
-                if client.exec(cmd::Auth(password)).await? {
-                    return Ok(client.into_inner());
+                match client.exec(cmd::Auth(password)).await {
+                    Ok(true) => return Ok(client.into_inner()),
+                    // password is rejected, try next one
+                    Ok(false) | Err(CommandError::Error(_)) => {}
+                    Err(err) => return Err(err.into()),
                 }
             }
             Err(ConnectError::Unauthorized)

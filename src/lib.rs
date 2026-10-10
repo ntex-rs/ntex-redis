@@ -81,16 +81,3 @@ macro_rules! array {
         $crate::codec::Request::Array(vec![$($e.into(),)*])
     }}
 }
-
-#[cfg(test)]
-pub fn gen_random_key() -> String {
-    use rand::distr::Alphanumeric;
-    use rand::{Rng, rng};
-
-    let key: String = rng()
-        .sample_iter(&Alphanumeric)
-        .take(12)
-        .map(char::from)
-        .collect();
-    key
-}
