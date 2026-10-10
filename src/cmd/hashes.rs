@@ -319,6 +319,6 @@ where
         Request::from_static("HINCRBY"),
         Request::BulkString(key.into()),
         Request::BulkString(field.into()),
-        Request::BulkString(i64::from(increment).to_string().into()),
+        Request::BulkInteger(i64::from(increment)),
     ]))
 }

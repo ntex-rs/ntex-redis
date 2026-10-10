@@ -156,7 +156,7 @@ where
     utils::BoolOutputCommand(Request::Array(vec![
         Request::from_static("EXPIRE"),
         Request::BulkString(key.into()),
-        Request::BulkString(i64::from(seconds).to_string().into()),
+        Request::BulkInteger(i64::from(seconds)),
     ]))
 }
 
@@ -173,7 +173,7 @@ where
     utils::BoolOutputCommand(Request::Array(vec![
         Request::from_static("EXPIREAT"),
         Request::BulkString(key.into()),
-        Request::BulkString(i64::from(timestamp).to_string().into()),
+        Request::BulkInteger(i64::from(timestamp)),
     ]))
 }
 

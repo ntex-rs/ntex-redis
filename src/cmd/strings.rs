@@ -208,6 +208,6 @@ where
     utils::IntOutputCommand(Request::Array(vec![
         Request::from_static("INCRBY"),
         Request::BulkString(key.into()),
-        Request::BulkString(i64::from(increment).to_string().into()),
+        Request::BulkInteger(i64::from(increment)),
     ]))
 }
