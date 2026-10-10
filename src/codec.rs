@@ -145,6 +145,12 @@ impl<'a> Writer<'a> {
 /// Bulk strings up to this size are written with a single copy
 const SMALL_BULK: usize = 64;
 
+/// Max read buffer reservation for an incomplete bulk string, unless more is already buffered
+const MAX_RESERVE: usize = 1024 * 1024;
+
+/// Buffered size of an incomplete response above which read buffer grows geometrically
+const GROW_THRESHOLD: usize = 256 * 1024;
+
 /// A command argument, written as a bulk string.
 ///
 /// Implemented for strings, byte slices, [`Bytes`] and integers. Integers
@@ -1116,16 +1122,31 @@ struct Scanner {
 
 impl Scanner {
     /// Get the length of the first complete response in the buffer
-    fn frame_len(&self, buf: &[u8]) -> Result<Option<usize>, Error> {
+    ///
+    /// For an incomplete response, reserves read buffer capacity for the rest of it.
+    fn frame_len(&self, buf: &mut BytesMut) -> Result<Option<usize>, Error> {
         let (pos, pending) = match self.pending.get() {
             // buffer can only grow while response is incomplete
             pending if pending > 0 && self.pos.get() <= buf.len() => (self.pos.get(), pending),
             _ => (0, 1),
         };
         match scan(buf, pos, pending) {
-            Ok(Scan::Incomplete(pos, pending)) => {
+            Ok(Scan::Incomplete(pos, pending, need)) => {
                 self.pos.set(pos);
                 self.pending.set(pending);
+                // io read buffer grows by small steps, reserve whole bulk string
+                // in advance, size is capped as it comes from the server
+                let len = buf.len();
+                let target = if need > len {
+                    cmp::min(need, cmp::max(len * 2, MAX_RESERVE))
+                } else if len >= GROW_THRESHOLD {
+                    len * 2
+                } else {
+                    0
+                };
+                if target > buf.capacity() {
+                    buf.reserve(target - len);
+                }
                 Ok(None)
             }
             res => {
@@ -1142,8 +1163,9 @@ impl Scanner {
 enum Scan {
     /// Length of the complete response
     Complete(usize),
-    /// Start of the first incomplete value and number of values to scan
-    Incomplete(usize, usize),
+    /// Start of the first incomplete value, number of values to scan
+    /// and end of the incomplete bulk string (0 for other values)
+    Incomplete(usize, usize, usize),
 }
 
 /// Scan response values starting at `pos`
@@ -1152,7 +1174,7 @@ enum Scan {
 fn scan(buf: &[u8], mut pos: usize, mut pending: usize) -> Result<Scan, Error> {
     while pending > 0 {
         let start = pos;
-        let incomplete = Ok(Scan::Incomplete(start, pending));
+        let incomplete = Ok(Scan::Incomplete(start, pending, 0));
         pending -= 1;
 
         let Some(&kind) = buf.get(pos) else {
@@ -1171,7 +1193,7 @@ fn scan(buf: &[u8], mut pos: usize, mut pending: usize) -> Result<Scan, Error> {
                         .and_then(|size| p.checked_add(size)?.checked_add(2))
                         .ok_or_else(|| Error::Parse(format!("Invalid string size: {size}")))?;
                     if end > buf.len() {
-                        return incomplete;
+                        return Ok(Scan::Incomplete(start, pending + 1, end));
                     }
                     pos = end;
                 }
@@ -1711,6 +1733,37 @@ mod tests {
             b"*2\r\n$1\r\na\r\n:1\r\n".as_ref()
         );
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_decode_reserve() {
+        let codec = Codec::new();
+        // incomplete bulk string, capacity is reserved for the whole value
+        let mut buf = BytesMut::from(&b"$100000\r\nabc"[..]);
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
+        assert!(buf.capacity() >= 100_011);
+        buf.extend_from_slice(&[b'a'; 99_997]);
+        buf.extend_from_slice(b"\r\n");
+        let Response::Bytes(val) = codec.decode(&mut buf).unwrap().unwrap() else {
+            panic!()
+        };
+        assert_eq!(val.len(), 100_000);
+
+        // huge size, reservation is capped
+        let codec = Codec::new();
+        let mut buf = BytesMut::from(&b"*2\r\n$1000000000\r\nabc"[..]);
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
+        assert!(buf.capacity() >= MAX_RESERVE);
+        assert!(buf.capacity() < 2 * MAX_RESERVE);
+
+        // large incomplete array, buffer grows geometrically
+        let codec = Codec::new();
+        let mut buf = BytesMut::from(&b"*100000\r\n"[..]);
+        while buf.len() < GROW_THRESHOLD {
+            buf.extend_from_slice(b":1\r\n");
+        }
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
+        assert!(buf.capacity() >= 2 * buf.len());
     }
 
     #[test]

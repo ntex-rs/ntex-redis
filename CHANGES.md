@@ -34,6 +34,8 @@
 
 * `Codec` is stateful, decoder resumes scanning of a partially received response, use `Codec::new()`
 
+* Decoder reserves read buffer capacity for large responses
+
 * `Client::exec()` and `SimpleClient::send()` report write errors
 
 * Avoid string allocation for integer arguments of `IncrBy`, `HIncrBy`, `Expire` and `ExpireAt`
