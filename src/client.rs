@@ -96,7 +96,8 @@ impl Client {
 
     /// Delete all the keys of the currently selected DB.
     pub async fn flushdb(&self) -> Result<(), Error> {
-        self._call("FLUSHDB".into()).await?;
+        self._call(Request::Array(vec![Request::from_static("FLUSHDB")]))
+            .await?;
         Ok(())
     }
 
