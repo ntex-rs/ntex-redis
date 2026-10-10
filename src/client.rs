@@ -87,14 +87,10 @@ impl Client {
     where
         T: Command,
     {
-        if self.io.is_closed() {
-            Err(CommandError::Protocol(Error::PeerGone(None)))
-        } else {
-            self.send(|io| io.with_write_src(|buf| cmd.encode(&mut Writer::new(buf))))
-                .await
-                .map_err(CommandError::Protocol)
-                .and_then(|frame| Frame::new(frame).decode::<T>())
-        }
+        self.send(|io| io.with_write_src(|buf| cmd.encode(&mut Writer::new(buf))))
+            .await
+            .map_err(CommandError::Protocol)
+            .and_then(|frame| Frame::new(frame).decode::<T>())
     }
 
     /// Delete all the keys of the currently selected DB.
@@ -119,7 +115,10 @@ impl Client {
         F: FnOnce(&IoRef) -> Result<(), E>,
         Error: From<E>,
     {
-        if let Err(e) = f(&self.io) {
+        if self.io.is_closed() {
+            // read task is stopped, response would never arrive
+            Err(Error::PeerGone(None))
+        } else if let Err(e) = f(&self.io) {
             Err(e.into())
         } else {
             let (tx, rx) = self.pool.channel();

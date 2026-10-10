@@ -1,5 +1,6 @@
 use ntex::util::{Bytes, HashMap};
-use ntex_redis::{Client, RedisConnector, cmd};
+use ntex::{service::Pipeline, util::stream_recv};
+use ntex_redis::{Client, RedisConnector, array, cmd, codec::Response, errors::ConnectError};
 use rand::{Rng, distr::Alphanumeric, rng};
 use std::time::{Duration, SystemTime};
 
@@ -24,7 +25,7 @@ async fn test_auth() {
         .password("test")
         .connect()
         .await;
-    assert!(result.is_err());
+    assert!(matches!(result, Err(ConnectError::Unauthorized)));
 }
 
 #[ntex::test]
@@ -33,7 +34,7 @@ async fn test_auth_simple() {
         .password("test")
         .connect_simple()
         .await;
-    assert!(result.is_err());
+    assert!(matches!(result, Err(ConnectError::Unauthorized)));
 }
 
 #[ntex::test]
@@ -376,5 +377,197 @@ async fn test_psubscribe() {
     assert_eq!(
         message.unwrap().unwrap(),
         cmd::SubscribeItem::UnSubscribed(pattern.clone())
+    );
+}
+
+#[ntex::test]
+async fn test_set_options() {
+    let redis = connect().await;
+    let key = new_key();
+
+    // XX on missing key
+    let result = redis.exec(cmd::Set(&key, "1").if_exists()).await.unwrap();
+    assert!(!result);
+    assert_eq!(redis.exec(cmd::Get(&key)).await.unwrap(), None);
+
+    // NX on missing key
+    let result = redis
+        .exec(cmd::Set(&key, "1").if_not_exists())
+        .await
+        .unwrap();
+    assert!(result);
+
+    // NX on existing key
+    let result = redis
+        .exec(cmd::Set(&key, "2").if_not_exists())
+        .await
+        .unwrap();
+    assert!(!result);
+    assert_eq!(redis.exec(cmd::Get(&key)).await.unwrap().unwrap(), "1");
+
+    // EX
+    let result = redis
+        .exec(cmd::Set(&key, "3").if_exists().expire_secs(100))
+        .await
+        .unwrap();
+    assert!(result);
+    let ttl = redis.exec(cmd::Ttl(&key)).await.unwrap();
+    assert!(matches!(ttl, cmd::TtlResult::Seconds(99..=100)), "{ttl:?}");
+
+    // KEEPTTL
+    let result = redis.exec(cmd::Set(&key, "4").keepttl()).await.unwrap();
+    assert!(result);
+    let ttl = redis.exec(cmd::Ttl(&key)).await.unwrap();
+    assert!(matches!(ttl, cmd::TtlResult::Seconds(99..=100)), "{ttl:?}");
+
+    // PX
+    let result = redis
+        .exec(cmd::Set(&key, "5").expire_millis(50_000))
+        .await
+        .unwrap();
+    assert!(result);
+    let ttl = redis.exec(cmd::Ttl(&key)).await.unwrap();
+    assert!(matches!(ttl, cmd::TtlResult::Seconds(49..=50)), "{ttl:?}");
+
+    // SET without KEEPTTL clears ttl
+    redis.exec(cmd::Set(&key, "6")).await.unwrap();
+    let ttl = redis.exec(cmd::Ttl(&key)).await.unwrap();
+    assert_eq!(ttl, cmd::TtlResult::NoExpire);
+
+    redis.exec(cmd::Del(&key)).await.unwrap();
+}
+
+#[ntex::test]
+async fn test_keys_pattern() {
+    let redis = connect().await;
+    let prefix = new_key();
+    let key1 = format!("{prefix}:1");
+    let key2 = format!("{prefix}:2");
+    redis.exec(cmd::Set(&key1, "1")).await.unwrap();
+    redis.exec(cmd::Set(&key2, "2")).await.unwrap();
+
+    let mut keys = redis.exec(cmd::Keys(format!("{prefix}:*"))).await.unwrap();
+    keys.sort();
+    assert_eq!(keys, [key1.as_str(), key2.as_str()]);
+
+    let keys = redis.exec(cmd::Keys(format!("{prefix}:x*"))).await.unwrap();
+    assert!(keys.is_empty());
+
+    let result = redis.exec(cmd::Del(&key1).key(&key2)).await.unwrap();
+    assert_eq!(result, 2);
+}
+
+#[ntex::test]
+async fn test_lists_extend() {
+    let redis = connect().await;
+    let key = new_key();
+
+    let result = redis
+        .exec(cmd::RPush(&key, "1").extend(["2", "3"]))
+        .await
+        .unwrap();
+    assert_eq!(result, 3);
+    let result = redis
+        .exec(cmd::LPush(&key, "0").value("-1").if_exists())
+        .await
+        .unwrap();
+    assert_eq!(result, 5);
+
+    let result = redis.exec(cmd::LIndex(&key, 0)).await.unwrap().unwrap();
+    assert_eq!(result, "-1");
+    let result = redis.exec(cmd::RPop(&key)).await.unwrap().unwrap();
+    assert_eq!(result, "3");
+
+    redis.exec(cmd::Del(&key)).await.unwrap();
+}
+
+#[ntex::test]
+async fn test_hashes_remove_all() {
+    let redis = connect().await;
+    let key = new_key();
+
+    redis
+        .exec(cmd::HSet(&key, "f1", "1").entry("f2", "2").entry("f3", "3"))
+        .await
+        .unwrap();
+    let result = redis
+        .exec(cmd::HDel(&key, "f1").remove_all(["f2", "unknown"]))
+        .await
+        .unwrap();
+    assert_eq!(result, 2);
+    assert_eq!(redis.exec(cmd::HLen(&key)).await.unwrap(), 1);
+
+    redis.exec(cmd::Del(&key)).await.unwrap();
+}
+
+#[ntex::test]
+async fn test_client_service() {
+    let redis = connect().await;
+    let key = new_key();
+
+    let pl = Pipeline::new((), redis.clone());
+    pl.ready().await.unwrap();
+
+    let result = pl.call(array!["SET", &key, "value"]).await.unwrap();
+    assert_eq!(result, Response::String("OK".into()));
+    let result = pl.call(array!["GET", &key]).await.unwrap();
+    assert_eq!(result, Response::Bytes(Bytes::from_static(b"value")));
+    let result = pl.call(array!["DEL", &key]).await.unwrap();
+    assert_eq!(result, Response::Integer(1));
+
+    // error reply
+    let result = pl.call(array!["INCR"]).await.unwrap();
+    assert!(matches!(result, Response::Error(_)), "{result:?}");
+    assert_eq!(redis.exec(cmd::Ping()).await.unwrap(), "PONG");
+}
+
+#[ntex::test]
+async fn test_connector_config() {
+    let redis = RedisConnector::new("127.0.0.1:6379")
+        .config(ntex::SharedCfg::default())
+        .connector(ntex::connect::Connector::default())
+        .connect()
+        .await
+        .unwrap();
+    assert!(redis.is_connected());
+    assert_eq!(redis.exec(cmd::Ping()).await.unwrap(), "PONG");
+}
+
+#[ntex::test]
+async fn test_subscribe_stream() {
+    let channel = new_key();
+
+    let subscriber = RedisConnector::new("127.0.0.1:6379")
+        .connect_simple()
+        .await
+        .unwrap();
+    let mut pubsub = subscriber
+        .subscribe(cmd::Subscribe(vec![&channel]))
+        .unwrap();
+    assert_eq!(
+        stream_recv(&mut pubsub).await.unwrap().unwrap(),
+        cmd::SubscribeItem::Subscribed(channel.clone().into())
+    );
+
+    let publisher = connect().await;
+    publisher.exec(cmd::Publish(&channel, "1")).await.unwrap();
+    publisher.exec(cmd::Publish(&channel, "2")).await.unwrap();
+
+    assert_eq!(
+        stream_recv(&mut pubsub).await.unwrap().unwrap(),
+        cmd::SubscribeItem::Message {
+            pattern: None,
+            channel: channel.clone().into(),
+            payload: Bytes::from_static(b"1")
+        }
+    );
+    let item = std::future::poll_fn(|cx| pubsub.poll_recv(cx)).await;
+    assert_eq!(
+        item.unwrap().unwrap(),
+        cmd::SubscribeItem::Message {
+            pattern: None,
+            channel: channel.clone().into(),
+            payload: Bytes::from_static(b"2")
+        }
     );
 }

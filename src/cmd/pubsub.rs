@@ -274,3 +274,116 @@ fn channels_request<T: Arg>(cmd: &'static str, channels: Option<Vec<T>>) -> ArgL
 
 impl PubSubCommand for SubscribeOutputCommand {}
 impl PubSubCommand for UnSubscribeOutputCommand {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bytes(v: &'static str) -> Response {
+        Response::Bytes(Bytes::from_static(v.as_bytes()))
+    }
+
+    fn item(items: Vec<Response>) -> Result<SubscribeItem, CommandError> {
+        SubscribeItem::try_from(Response::Array(items))
+    }
+
+    #[test]
+    fn test_subscribe_item_try_from() {
+        let ch = Bytes::from_static(b"ch");
+        for t in ["subscribe", "ssubscribe", "psubscribe"] {
+            let res = item(vec![bytes(t), bytes("ch"), Response::Integer(1)]).unwrap();
+            assert_eq!(res, SubscribeItem::Subscribed(ch.clone()));
+        }
+        for t in ["unsubscribe", "sunsubscribe", "punsubscribe"] {
+            let res = item(vec![bytes(t), bytes("ch"), Response::Integer(0)]).unwrap();
+            assert_eq!(res, SubscribeItem::UnSubscribed(ch.clone()));
+        }
+        for t in ["message", "smessage"] {
+            let res = item(vec![bytes(t), bytes("ch"), bytes("data")]).unwrap();
+            assert_eq!(
+                res,
+                SubscribeItem::Message {
+                    pattern: None,
+                    channel: ch.clone(),
+                    payload: Bytes::from_static(b"data"),
+                }
+            );
+        }
+        let res = item(vec![
+            bytes("pmessage"),
+            bytes("c*"),
+            bytes("ch"),
+            bytes("data"),
+        ])
+        .unwrap();
+        assert_eq!(
+            res,
+            SubscribeItem::Message {
+                pattern: Some(Bytes::from_static(b"c*")),
+                channel: ch.clone(),
+                payload: Bytes::from_static(b"data"),
+            }
+        );
+    }
+
+    #[test]
+    fn test_subscribe_item_try_from_errors() {
+        // integer message payload
+        let res = item(vec![bytes("message"), bytes("ch"), Response::Integer(1)]);
+        assert!(matches!(
+            res,
+            Err(CommandError::Output(
+                "Subscription message payload is not bytes",
+                _
+            ))
+        ));
+
+        // unknown message type
+        let res = item(vec![bytes("foo"), bytes("ch"), bytes("data")]);
+        assert!(matches!(
+            res,
+            Err(CommandError::Output("Subscription message type unknown", Response::Bytes(t))) if t == "foo"
+        ));
+
+        // payload must be bytes or integer
+        let res = item(vec![bytes("message"), bytes("ch"), Response::Nil]);
+        assert!(matches!(
+            res,
+            Err(CommandError::Output(
+                "Not a bytes object or integer",
+                Response::Nil
+            ))
+        ));
+
+        // message type and channel must be bytes
+        let res = item(vec![Response::Integer(1), bytes("ch"), bytes("data")]);
+        assert!(matches!(
+            res,
+            Err(CommandError::Output("Not a bytes object", _))
+        ));
+        let res = item(vec![
+            bytes("pmessage"),
+            Response::Nil,
+            bytes("ch"),
+            bytes("data"),
+        ]);
+        assert!(matches!(
+            res,
+            Err(CommandError::Output("Not a bytes object", _))
+        ));
+
+        // wrong array length
+        let res = item(vec![bytes("message"), bytes("ch")]);
+        assert!(matches!(
+            res,
+            Err(CommandError::Output("Array needs to be 3 or 4 elements", _))
+        ));
+
+        // not an array
+        let res = SubscribeItem::try_from(Response::Nil);
+        assert!(matches!(
+            res,
+            Err(CommandError::Output("Unexpected value", Response::Nil))
+        ));
+    }
+}

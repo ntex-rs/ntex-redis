@@ -859,13 +859,8 @@ impl TryFrom<Response> for ByteString {
     fn try_from(val: Response) -> Result<Self, Self::Error> {
         match val {
             Response::String(val) => Ok(val),
-            Response::Bytes(val) => {
-                if let Ok(val) = ByteString::try_from(val) {
-                    Ok(val)
-                } else {
-                    Err(("Cannot convert into a string", Response::Nil))
-                }
-            }
+            Response::Bytes(val) => ByteString::try_from(val.clone())
+                .map_err(|_| ("Cannot convert into a string", Response::Bytes(val))),
             _ => Err(("Cannot convert into a string", val)),
         }
     }
@@ -1038,7 +1033,7 @@ macro_rules! impl_tryfrom_integers {
                         {
                             Err((
                                 concat!(
-                                    "i64 value cannot be represented as {}",
+                                    "i64 value cannot be represented as ",
                                     stringify!($int_ty),
                                 ),
                                 Response::Integer(x),
@@ -1882,5 +1877,217 @@ mod tests {
             frame(b"*3\r\n$3\r\nfoo\r\n$2\r\nch\r\n:1\r\n").decode::<SubscribeOutputCommand>(),
             Err(CommandError::Output(..))
         ));
+    }
+
+    #[test]
+    fn test_request_conversions() {
+        assert_eq!(Request::from(1i8), Request::Integer(1));
+        assert_eq!(Request::from(-2i16), Request::Integer(-2));
+        assert_eq!(Request::from(3i32), Request::Integer(3));
+        assert_eq!(Request::from(4i64), Request::Integer(4));
+        assert_eq!(Request::from(5u8), Request::Integer(5));
+        assert_eq!(Request::from(6u16), Request::Integer(6));
+        assert_eq!(Request::from(7u32), Request::Integer(7));
+        assert_eq!(Request::from(8usize), Request::Integer(8));
+        assert_eq!(
+            Request::from_bstatic(b"a"),
+            Request::BulkStatic(b"a".as_ref())
+        );
+
+        let expected = Request::BulkString(BulkString::from_static("value"));
+        let s = String::from("value");
+        let bs = ByteString::from_static("value");
+        let b = Bytes::from_static(b"value");
+        assert_eq!(Request::from(s.clone()), expected);
+        assert_eq!(Request::from(&s), expected);
+        assert_eq!(Request::from("value"), expected);
+        assert_eq!(Request::from(&"value"), expected);
+        assert_eq!(Request::from(bs.clone()), expected);
+        assert_eq!(Request::from(&bs), expected);
+        assert_eq!(Request::from(b.clone()), expected);
+        assert_eq!(Request::from(&b), expected);
+        assert_eq!(Request::from(BytesMut::copy_from_slice(&b)), expected);
+        assert_eq!(Request::from(&b"value"[..]), expected);
+        assert_eq!(Request::from(b"value".to_vec()), expected);
+        assert_eq!(
+            Request::BulkString(BulkString::from_bstatic(b"value")),
+            expected
+        );
+
+        // add and extend convert non-array requests into an array
+        assert_eq!(Request::from("GET").add("key"), array!["GET", "key"]);
+        assert_eq!(
+            Request::from("DEL").extend(["k1", "k2"]),
+            array!["DEL", "k1", "k2"]
+        );
+        assert_eq!(array!["DEL"].add("k1"), array!["DEL", "k1"]);
+    }
+
+    #[test]
+    fn test_encode_values() {
+        let bytes = obj_to_bytes(Request::String(ByteString::from_static("OK")));
+        assert_eq!(bytes, b"*1\r\n+OK\r\n".as_ref());
+
+        let bytes = obj_to_bytes(array![
+            "SET",
+            Request::Array(vec![Request::Integer(-1), Request::BulkInteger(10)])
+        ]);
+        assert_eq!(
+            bytes,
+            b"*2\r\n$3\r\nSET\r\n*2\r\n:-1\r\n$2\r\n10\r\n".as_ref()
+        );
+    }
+
+    #[test]
+    fn test_response_into_result() {
+        let err = Response::Error(ByteString::from_static("ERR"));
+        assert_eq!(err.into_result(), Err(ByteString::from_static("ERR")));
+        assert_eq!(Response::Nil.into_result(), Ok(Response::Nil));
+    }
+
+    #[test]
+    fn test_response_scalar_conversions() {
+        let bytes = Response::Bytes(Bytes::from_static(b"value"));
+        let string = Response::String(ByteString::from_static("value"));
+        let invalid = Response::Bytes(Bytes::from_static(b"\xff\xfe"));
+
+        // Bytes
+        assert_eq!(Bytes::try_from(bytes.clone()).unwrap(), "value");
+        assert_eq!(
+            Bytes::try_from(string.clone()),
+            Err(("Not a bytes object", string.clone()))
+        );
+
+        // ByteString
+        assert_eq!(ByteString::try_from(string.clone()).unwrap(), "value");
+        assert_eq!(ByteString::try_from(bytes.clone()).unwrap(), "value");
+        assert_eq!(
+            ByteString::try_from(invalid.clone()),
+            Err(("Cannot convert into a string", invalid))
+        );
+        assert_eq!(
+            ByteString::try_from(Response::Integer(1)),
+            Err(("Cannot convert into a string", Response::Integer(1)))
+        );
+
+        // i64
+        assert_eq!(i64::try_from(Response::Integer(-1)).unwrap(), -1);
+        assert_eq!(
+            i64::try_from(bytes.clone()),
+            Err(("Cannot be converted into an i64", bytes.clone()))
+        );
+
+        // bool
+        assert!(!bool::try_from(Response::Integer(0)).unwrap());
+        assert!(bool::try_from(Response::Integer(1)).unwrap());
+        assert_eq!(
+            bool::try_from(Response::Integer(2)),
+            Err((
+                "i64 value cannot be represented as bool",
+                Response::Integer(2)
+            ))
+        );
+        assert!(bool::try_from(Response::Nil).is_err());
+
+        // ()
+        assert_eq!(
+            <()>::try_from(Response::String(ByteString::from_static("OK"))),
+            Ok(())
+        );
+        assert_eq!(
+            <()>::try_from(string.clone()),
+            Err(("Unexpected value within String", string))
+        );
+        assert_eq!(
+            <()>::try_from(bytes.clone()),
+            Err(("Unexpected value", bytes))
+        );
+    }
+
+    #[test]
+    fn test_response_integer_conversions() {
+        assert_eq!(i32::try_from(Response::Integer(-5)).unwrap(), -5);
+        assert_eq!(u32::try_from(Response::Integer(5)).unwrap(), 5);
+        assert_eq!(
+            u64::try_from(Response::Integer(i64::MAX)).unwrap(),
+            i64::MAX as u64
+        );
+        assert_eq!(isize::try_from(Response::Integer(-5)).unwrap(), -5);
+        assert_eq!(usize::try_from(Response::Integer(5)).unwrap(), 5);
+
+        assert_eq!(
+            u32::try_from(Response::Integer(-1)),
+            Err((
+                "i64 value cannot be represented as u32",
+                Response::Integer(-1)
+            ))
+        );
+        assert!(u32::try_from(Response::Integer(i64::from(u32::MAX) + 1)).is_err());
+        assert!(i32::try_from(Response::Integer(i64::from(i32::MIN) - 1)).is_err());
+        assert!(u64::try_from(Response::Integer(-1)).is_err());
+        assert!(usize::try_from(Response::Nil).is_err());
+    }
+
+    #[test]
+    fn test_response_collection_conversions() {
+        let int = |v| Response::Integer(v);
+        let s = |v: &'static str| Response::Bytes(Bytes::from_static(v.as_bytes()));
+
+        // Vec
+        assert_eq!(
+            Vec::<i64>::try_from(Response::Array(vec![int(1), int(2)])).unwrap(),
+            [1, 2]
+        );
+        assert_eq!(
+            Vec::<i64>::try_from(Response::Array(vec![int(1), s("a")])),
+            Err(("Cannot be converted into an i64", s("a")))
+        );
+        assert_eq!(
+            Vec::<i64>::try_from(int(1)),
+            Err(("Cannot be converted into a vector", int(1)))
+        );
+
+        // tuples
+        let pair = Response::Array(vec![s("a"), int(1)]);
+        assert_eq!(
+            <(ByteString, i64)>::try_from(pair.clone()).unwrap(),
+            (ByteString::from_static("a"), 1)
+        );
+        assert_eq!(
+            <(ByteString, i64, i64)>::try_from(pair.clone()),
+            Err(("Array needs to be 3 elements", pair.clone()))
+        );
+        assert_eq!(
+            <(i64, i64)>::try_from(pair.clone()),
+            Err(("Cannot be converted into an i64", s("a")))
+        );
+        assert_eq!(
+            <(i64, i64)>::try_from(int(1)),
+            Err(("Unexpected value", int(1)))
+        );
+
+        let triple = Response::Array(vec![s("a"), int(1), int(2)]);
+        assert_eq!(
+            <(ByteString, i64, i64)>::try_from(triple.clone()).unwrap(),
+            (ByteString::from_static("a"), 1, 2)
+        );
+        assert_eq!(
+            <(ByteString, i64)>::try_from(triple.clone()),
+            Err(("Array needs to be 2 elements", triple))
+        );
+        assert_eq!(
+            <(i64, i64, i64)>::try_from(int(1)),
+            Err(("Unexpected value", int(1)))
+        );
+
+        // hashbrown map
+        let map = HashbrownMap::<ByteString, i64>::try_from(pair.clone()).unwrap();
+        assert_eq!(map.len(), 1);
+        assert_eq!(map["a"], 1);
+        assert_eq!(
+            HashbrownMap::<ByteString, i64>::try_from(int(1)),
+            Err(("Cannot be converted into a hashmap", int(1)))
+        );
+        assert!(HashbrownMap::<i64, i64>::try_from(pair).is_err());
     }
 }

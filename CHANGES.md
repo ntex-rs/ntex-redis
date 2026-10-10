@@ -38,6 +38,14 @@
 
 * `Client::exec()` and `SimpleClient::send()` report write errors
 
+* Fix `RedisConnector` not trying next password when `AUTH` is rejected
+
+* Fix `Client::flushdb()` and `Client` service calls hanging after connection is closed
+
+* `TryFrom<Response> for ByteString` returns original bytes on invalid utf-8
+
+* Fix integer conversion error messages
+
 * Avoid string allocation for integer arguments of `IncrBy`, `HIncrBy`, `Expire` and `ExpireAt`
 
 * Export `SelectCommand`, `PingCommand`, `ResetCommand`, `BoolOutputCommand` and
