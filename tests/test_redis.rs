@@ -87,7 +87,8 @@ async fn test_keys() {
         .unwrap();
     assert!(resp);
     let resp = redis.exec(cmd::Ttl(&key1)).await.unwrap();
-    assert_eq!(resp, cmd::TtlResult::Seconds(10));
+    // expire time is truncated to whole seconds, remaining ttl is 9.35..10.35s
+    assert!(matches!(resp, cmd::TtlResult::Seconds(9..=10)), "{resp:?}");
     let resp = redis.exec(cmd::Ttl(&key2)).await.unwrap();
     assert_eq!(resp, cmd::TtlResult::NotFound);
     let resp = redis.exec(cmd::Expire(&key2, 1)).await.unwrap();
