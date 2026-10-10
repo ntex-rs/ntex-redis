@@ -16,6 +16,11 @@
 
 * Fix `SimpleClient` hang on write backpressure
 
+* Export `SelectCommand`, `PingCommand`, `ResetCommand`, `BoolOutputCommand` and
+  `UnSubscribeOutputCommand` from `cmd::commands`
+
+* Improve API docs
+
 ## [2.0.0] - 2024-05-28
 
 * Use ntex-service 3.0

@@ -1,5 +1,18 @@
 //! Redis client for ntex framework.
 //!
+//! Use [`RedisConnector`] to connect to a redis server. It creates one of two clients:
+//!
+//! * [`Client`] - shared client. It is cheap to clone, all clones use one
+//!   connection and commands are pipelined.
+//! * [`SimpleClient`] - executes one command at a time. It supports pub/sub,
+//!   see [`SimpleClient::subscribe`].
+//!
+//! Commands are created with the functions in the [`cmd`] module. Custom
+//! commands can be added by implementing the [`cmd::Command`] trait.
+//!
+//! This crate does not select an async runtime. Applications must enable
+//! one of the ntex runtime features, e.g. `ntex/tokio`.
+//!
 //! # Example
 //!
 //! ```rust
@@ -48,25 +61,19 @@ pub use self::simple::{SimpleClient, SubscriptionClient};
 /// # Examples
 ///
 /// ```rust
-/// #[macro_use]
-/// extern crate ntex_redis;
+/// use ntex_redis::array;
 ///
-/// fn main() {
-///     let value = format!("something_{}", 123);
-///     array!["SET", "key_name", value];
-/// }
+/// let value = format!("something_{}", 123);
+/// let command = array!["SET", "key_name", value];
 /// ```
 ///
 /// For variable length Redis commands:
 ///
 /// ```rust
-/// #[macro_use]
-/// extern crate ntex_redis;
+/// use ntex_redis::array;
 ///
-/// fn main() {
-///     let data = vec!["data", "from", "somewhere", "else"];
-///     let command = array!["RPUSH", "mykey"].extend(data);
-/// }
+/// let data = vec!["data", "from", "somewhere", "else"];
+/// let command = array!["RPUSH", "mykey"].extend(data);
 /// ```
 #[macro_export]
 macro_rules! array {

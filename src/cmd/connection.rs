@@ -6,7 +6,7 @@ use crate::codec::{Request, Response};
 /// SELECT redis command
 ///
 /// Select the Redis logical database having the specified zero-based
-/// numeric index.
+/// numeric index. Returns `true` on success.
 ///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
@@ -30,6 +30,7 @@ pub fn Select(db: u32) -> SelectCommand {
     ]))
 }
 
+/// SELECT command, see [`Select`](crate::cmd::Select)
 pub struct SelectCommand(Request);
 
 impl Command for SelectCommand {
@@ -71,6 +72,7 @@ pub fn Ping() -> PingCommand {
     PingCommand(Request::Array(vec![Request::from_static("PING")]))
 }
 
+/// PING command, see [`Ping`](crate::cmd::Ping)
 pub struct PingCommand(Request);
 
 impl Command for PingCommand {
@@ -90,6 +92,7 @@ impl Command for PingCommand {
 }
 
 /// RESET redis command
+///
 /// This command performs a full reset of the connection's server-side context, mimicking the effect of disconnecting and reconnecting again.
 ///
 /// ```rust
@@ -110,6 +113,8 @@ impl Command for PingCommand {
 pub fn Reset() -> ResetCommand {
     ResetCommand(Request::Array(vec![Request::from_static("RESET")]))
 }
+
+/// RESET command, see [`Reset`](crate::cmd::Reset)
 pub struct ResetCommand(Request);
 
 impl Command for ResetCommand {

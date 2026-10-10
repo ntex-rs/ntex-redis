@@ -113,6 +113,7 @@ where
 /// LPUSH redis command
 ///
 /// Insert all the specified values at the head of the list stored at key.
+/// Returns the length of the list after the push operation.
 ///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
@@ -174,6 +175,32 @@ where
 /// RPUSH redis command
 ///
 /// Insert all the specified values at the tail of the list stored at key.
+/// Returns the length of the list after the push operation.
+///
+/// See [`LPush`] for additional options.
+///
+/// ```rust
+/// use ntex_redis::{cmd, RedisConnector};
+/// # use rand::{Rng, distr::Alphanumeric, rng};
+/// # fn gen_random_key() -> String {
+/// #    rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
+/// # }
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
+///     let key = gen_random_key();
+///
+///     redis.exec(cmd::RPush(&key, "value1").value("value2")).await?;
+///
+///     // get last value
+///     let value = redis.exec(cmd::LIndex(&key, -1)).await?;
+///     assert_eq!(value.unwrap(), "value2");
+///
+///     redis.exec(cmd::Del(&key)).await?;
+///     Ok(())
+/// }
+/// ```
 pub fn RPush<T, V>(key: T, value: V) -> LPushCommand
 where
     BulkString: From<T> + From<V>,
@@ -185,6 +212,7 @@ where
     ])
 }
 
+/// LPUSH and RPUSH command, see [`LPush`] and [`RPush`]
 pub struct LPushCommand(Vec<Request>);
 
 impl LPushCommand {

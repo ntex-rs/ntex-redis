@@ -11,8 +11,14 @@ use super::errors::{CommandError, Error};
 
 type Queue = Rc<RefCell<VecDeque<pool::Sender<Result<Response, Error>>>>>;
 
-#[derive(Clone)]
 /// Shared redis client
+///
+/// Client is cheap to clone, all clones share one connection. Commands are
+/// pipelined: multiple commands can be in flight and responses are matched
+/// in order. Pub/sub is not supported, use [`SimpleClient`](crate::SimpleClient).
+///
+/// Created by [`RedisConnector::connect`](crate::RedisConnector::connect).
+#[derive(Clone)]
 pub struct Client {
     io: IoRef,
     queue: Queue,
@@ -73,7 +79,7 @@ impl Client {
         }
     }
 
-    /// Execute redis command
+    /// Execute redis command and wait for the response
     pub async fn exec<T>(&self, cmd: T) -> Result<T::Output, CommandError>
     where
         T: Command,
