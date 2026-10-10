@@ -1,0 +1,45 @@
+name: CI (OSX)
+
+on: [push, pull_request]
+
+jobs:
+  build_and_test:
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - stable
+          - nightly
+
+    name: ${{ matrix.version }} - aarch64-apple-darwin
+    runs-on: macOS-latest
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@nextest
+
+      - name: Install ${{ matrix.version }}
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ matrix.version }}-aarch64-apple-darwin
+
+      - name: Start redis
+        run: |
+          brew install redis
+          redis-server --daemonize yes
+
+      - name: Generate Cargo.lock
+        run: cargo generate-lockfile
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests [tokio]
+        timeout-minutes: 10
+        run: |
+          cargo nextest run --retries=3 --all --features="ntex/tokio"
+
+      - name: Run tests [neon]
+        timeout-minutes: 10
+        run: |
+          cargo nextest run --retries=3 --all
