@@ -2,7 +2,7 @@ use std::pin::Pin;
 use std::{future::poll_fn, task::Context, task::Poll, task::ready};
 
 use super::cmd::{Command, commands::PubSubCommand, commands::SubscribeOutputCommand};
-use super::codec::{Codec, Writer};
+use super::codec::{Frame, FrameCodec, Writer};
 use super::errors::{CommandError, Error};
 use ntex_io::{IoBoxed, RecvError};
 use ntex_util::Stream;
@@ -81,11 +81,8 @@ impl SimpleClient {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<U::Output, CommandError>>> {
         loop {
-            return match ready!(self.io.poll_recv(&Codec, cx)) {
-                Ok(item) => match item.into_result() {
-                    Ok(result) => Poll::Ready(Some(U::to_output(result))),
-                    Err(err) => Poll::Ready(Some(Err(CommandError::Error(err)))),
-                },
+            return match ready!(self.io.poll_recv(&FrameCodec, cx)) {
+                Ok(frame) => Poll::Ready(Some(Frame::new(frame).decode::<U>())),
                 // client io does not use dispatcher timers
                 Err(RecvError::Timeout) => continue,
                 Err(RecvError::WriteBackpressure) => {

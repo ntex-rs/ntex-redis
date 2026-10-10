@@ -1,9 +1,7 @@
-use std::convert::{TryFrom, TryInto};
-
 use ntex_bytes::ByteString;
 
 use super::{Command, CommandError, utils};
-use crate::codec::{Arg, ArgList, Response, Writer};
+use crate::codec::{Arg, ArgList, Frame, Writer};
 
 /// DEL redis command
 ///
@@ -102,11 +100,8 @@ impl Command for KeysCommand {
         self.0.write(w);
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::Integer(val) => Ok(val as usize),
-            _ => Err(CommandError::Output("Cannot parse response", val)),
-        }
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        Ok(frame.int()? as usize)
     }
 }
 
@@ -208,9 +203,8 @@ impl<T: Arg> Command for TtlCommand<T> {
         w.args(("TTL", self.0));
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        let result = i64::try_from(val)?;
-        Ok(match result {
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        Ok(match frame.int()? {
             -1 => TtlResult::NoExpire,
             -2 => TtlResult::NotFound,
             s => TtlResult::Seconds(s),
@@ -267,10 +261,14 @@ impl<T: Arg> Command for KeysPatternCommand<T> {
         w.args(("KEYS", self.0));
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val.try_into() {
-            Ok(val) => Ok(val),
-            Err((_, val)) => Err(CommandError::Output("Cannot parse response", val)),
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        let Some(len) = frame.array()? else {
+            return Err(frame.unexpected("Cannot be converted into a vector"));
+        };
+        let mut keys = Vec::with_capacity(len);
+        for _ in 0..len {
+            keys.push(frame.string()?);
         }
+        Ok(keys)
     }
 }

@@ -1,8 +1,7 @@
 use ntex_bytes::Bytes;
-use std::convert::TryFrom;
 
 use super::{Command, CommandError};
-use crate::codec::{Args, Response, Writer};
+use crate::codec::{Args, Frame, Writer};
 
 /// Generic command that returns an optional bulk string
 ///
@@ -16,12 +15,8 @@ impl<A: Args> Command for BulkOutputCommand<A> {
         w.args(self.0);
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::Nil => Ok(None),
-            Response::Bytes(val) => Ok(Some(val)),
-            _ => Err(CommandError::Output("Cannot parse response", val)),
-        }
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        frame.bulk()
     }
 }
 
@@ -35,11 +30,8 @@ impl<A: Args> Command for IntOutputCommand<A> {
         w.args(self.0);
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::Integer(val) => Ok(val),
-            _ => Err(CommandError::Output("Cannot parse response", val)),
-        }
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        frame.int()
     }
 }
 
@@ -55,7 +47,11 @@ impl<A: Args> Command for BoolOutputCommand<A> {
         w.args(self.0);
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        Ok(bool::try_from(val)?)
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        match frame.int()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(frame.unexpected("i64 value cannot be represented as bool")),
+        }
     }
 }

@@ -1,10 +1,8 @@
-use std::convert::TryFrom;
-
 use ntex_bytes::Bytes;
 use ntex_util::HashMap;
 
 use super::{Command, CommandError, utils};
-use crate::codec::{Arg, ArgList, Response, Writer};
+use crate::codec::{Arg, ArgList, Frame, Writer};
 
 /// HGET redis command
 ///
@@ -77,8 +75,19 @@ impl<T: Arg> Command for HGetAllCommand<T> {
         w.args(("HGETALL", self.0));
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        Ok(HashMap::try_from(val)?)
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        let Some(len) = frame.array()? else {
+            return Err(frame.unexpected("Cannot be converted into a hashmap"));
+        };
+        if len % 2 != 0 {
+            return Err(frame.unexpected("Cannot convert an odd number of elements into a hashmap"));
+        }
+        let mut map = HashMap::with_capacity_and_hasher(len / 2, Default::default());
+        for _ in 0..len / 2 {
+            let key = frame.bytes()?;
+            map.insert(key, frame.bytes()?);
+        }
+        Ok(map)
     }
 }
 
@@ -141,11 +150,8 @@ impl Command for HSetCommand {
         self.0.write(w);
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::Integer(val) => Ok(val as usize),
-            _ => Err(CommandError::Output("Cannot parse response", val)),
-        }
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        Ok(frame.int()? as usize)
     }
 }
 
@@ -209,11 +215,8 @@ impl Command for HDelCommand {
         self.0.write(w);
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::Integer(val) => Ok(val as usize),
-            _ => Err(CommandError::Output("Cannot parse response", val)),
-        }
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        Ok(frame.int()? as usize)
     }
 }
 

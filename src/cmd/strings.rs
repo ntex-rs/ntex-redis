@@ -1,5 +1,5 @@
 use super::{Command, CommandError, utils};
-use crate::codec::{Arg, Response, Writer};
+use crate::codec::{Arg, Frame, Writer};
 
 /// GET redis command
 ///
@@ -141,17 +141,13 @@ impl<T: Arg, V: Arg> Command for SetCommand<T, V> {
         }
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::Nil => Ok(false),
-            Response::String(string) => match string.as_ref() {
-                "OK" => Ok(true),
-                _ => Err(CommandError::Output(
-                    "Unexpected value within String",
-                    Response::String(string),
-                )),
-            },
-            _ => Err(CommandError::Output("Unexpected value", val)),
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        if frame.is_nil() {
+            Ok(false)
+        } else if frame.peek()? == b'+' && frame.string()? == "OK" {
+            Ok(true)
+        } else {
+            Err(frame.unexpected("Unexpected value"))
         }
     }
 }

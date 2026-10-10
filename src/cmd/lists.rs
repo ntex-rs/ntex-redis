@@ -1,5 +1,5 @@
 use super::{Command, CommandError, utils};
-use crate::codec::{Arg, ArgList, Response, Writer};
+use crate::codec::{Arg, ArgList, Frame, Writer};
 
 /// LINDEX redis command
 ///
@@ -222,10 +222,7 @@ impl Command for LPushCommand {
         self.0.write(w);
     }
 
-    fn to_output(val: Response) -> Result<Self::Output, CommandError> {
-        match val {
-            Response::Integer(val) => Ok(val as usize),
-            _ => Err(CommandError::Output("Cannot parse response", val)),
-        }
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        Ok(frame.int()? as usize)
     }
 }
