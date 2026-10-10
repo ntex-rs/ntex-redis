@@ -10,19 +10,41 @@ mod hashes;
 mod keys;
 mod lists;
 mod pubsub;
+mod server;
+mod sets;
+mod sorted_sets;
 mod strings;
 mod utils;
 
 pub use self::auth::Auth;
-pub use self::connection::{Ping, Reset, Select};
-pub use self::hashes::{HDel, HGet, HGetAll, HIncrBy, HLen, HSet};
-pub use self::keys::{Del, Exists, Expire, ExpireAt, Keys, Ttl, TtlResult};
-pub use self::lists::{LIndex, LPop, LPush, RPop, RPush};
+pub use self::connection::{ClientGetName, ClientSetName, Echo, Ping, Reset, Select};
+pub use self::hashes::{
+    HDel, HExists, HGet, HGetAll, HIncrBy, HIncrByFloat, HKeys, HLen, HMGet, HScan, HSet, HSetNx,
+    HStrLen, HVals,
+};
+pub use self::keys::{
+    Del, Exists, Expire, ExpireAt, Keys, PExpire, PExpireAt, PTtl, Persist, Rename, RenameNx, Scan,
+    Touch, Ttl, TtlResult, Type, Unlink,
+};
+pub use self::lists::{
+    LIndex, LInsert, LLen, LMove, LPop, LPos, LPush, LRange, LRem, LSet, LTrim, RPop, RPush, Side,
+};
 pub use self::pubsub::{
     PSubscribe, PUnSubscribe, Publish, SPublish, SSubscribe, SUnSubscribe, Subscribe,
     SubscribeItem, UnSubscribe,
 };
-pub use self::strings::{Get, IncrBy, Set};
+pub use self::server::{DbSize, FlushAll, FlushDb, Info};
+pub use self::sets::{
+    SAdd, SCard, SDiff, SInter, SIsMember, SMIsMember, SMembers, SPop, SRandMember, SRem, SScan,
+    SUnion,
+};
+pub use self::sorted_sets::{
+    ZAdd, ZCard, ZCount, ZIncrBy, ZPopMax, ZPopMin, ZRange, ZRank, ZRem, ZRevRank, ZScan, ZScore,
+};
+pub use self::strings::{
+    Append, Decr, DecrBy, Get, GetDel, GetEx, GetRange, Incr, IncrBy, IncrByFloat, MGet, MSet, Set,
+    SetRange, StrLen,
+};
 
 /// Trait implemented by types that can be used as redis commands
 ///
@@ -33,14 +55,14 @@ pub use self::strings::{Get, IncrBy, Set};
 /// ```rust
 /// use ntex_redis::{cmd::Command, codec::{Frame, Writer}, errors::CommandError};
 ///
-/// /// STRLEN redis command
-/// struct StrLen(String);
+/// /// OBJECT FREQ redis command
+/// struct ObjectFreq(String);
 ///
-/// impl Command for StrLen {
+/// impl Command for ObjectFreq {
 ///     type Output = i64;
 ///
 ///     fn encode(self, w: &mut Writer<'_>) {
-///         w.args(("STRLEN", self.0));
+///         w.args(("OBJECT", "FREQ", self.0));
 ///     }
 ///
 ///     fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
@@ -71,10 +93,19 @@ pub mod commands {
     //! arguments, e.g. [`SetCommand::expire_secs`].
     pub use super::auth::AuthCommand;
     pub use super::connection::{PingCommand, ResetCommand, SelectCommand};
-    pub use super::hashes::{HDelCommand, HGetAllCommand, HSetCommand};
-    pub use super::keys::{KeysCommand, KeysPatternCommand, TtlCommand};
-    pub use super::lists::LPushCommand;
+    pub use super::hashes::{HDelCommand, HGetAllCommand, HMGetCommand, HSetCommand};
+    pub use super::keys::{KeysCommand, KeysPatternCommand, PTtlCommand, TtlCommand};
+    pub use super::lists::{LInsertCommand, LPosCommand, LPushCommand};
     pub use super::pubsub::{PubSubCommand, SubscribeOutputCommand, UnSubscribeOutputCommand};
-    pub use super::strings::SetCommand;
-    pub use super::utils::{BoolOutputCommand, BulkOutputCommand, IntOutputCommand};
+    pub use super::server::{FlushCommand, InfoCommand};
+    pub use super::sets::{MembersCommand, SMIsMemberCommand, SetOpCommand};
+    pub use super::sorted_sets::{
+        ZAddCommand, ZPopCommand, ZRangeCommand, ZRangeWithScoresCommand, ZRankCommand,
+        ZScoreCommand,
+    };
+    pub use super::strings::{GetExCommand, MGetCommand, MSetCommand, SetCommand};
+    pub use super::utils::{
+        BoolOutputCommand, BulkOutputCommand, BytesOutputCommand, FloatOutputCommand,
+        IntOutputCommand, ListOutputCommand, OkOutputCommand, ScanCommand, StringOutputCommand,
+    };
 }

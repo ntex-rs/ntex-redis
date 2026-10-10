@@ -287,3 +287,133 @@ where
 {
     utils::IntOutputCommand(("HINCRBY", key, field, i64::from(increment)))
 }
+
+/// HINCRBYFLOAT redis command
+///
+/// Increments the floating point number stored at `field` in the hash stored
+/// at `key` by `increment` and returns the value after the increment.
+pub fn HIncrByFloat<T: Arg, K: Arg>(
+    key: T,
+    field: K,
+    increment: f64,
+) -> utils::FloatOutputCommand<(&'static str, T, K, f64)> {
+    utils::FloatOutputCommand(("HINCRBYFLOAT", key, field, increment))
+}
+
+/// HMGET redis command
+///
+/// Returns the values of the specified fields in the hash stored at `key`,
+/// `None` for fields that do not exist.
+///
+/// ```rust
+/// use ntex_redis::{cmd, RedisConnector};
+/// # use rand::{Rng, distr::Alphanumeric, rng};
+/// # fn gen_random_key() -> String {
+/// #    rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
+/// # }
+///
+/// #[ntex::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let redis = RedisConnector::new("127.0.0.1:6379").connect().await?;
+///     let key = gen_random_key();
+///
+///     redis.exec(cmd::HSet(&key, "a", "1").entry("b", "2")).await?;
+///
+///     let values = redis.exec(cmd::HMGet(&key, "a").field("c").field("b")).await?;
+///     assert_eq!(values[0].as_ref().unwrap(), "1");
+///     assert_eq!(values[1], None);
+///     assert_eq!(values[2].as_ref().unwrap(), "2");
+///
+///     redis.exec(cmd::Del(&key)).await?;
+///     Ok(())
+/// }
+/// ```
+pub fn HMGet<T: Arg, K: Arg>(key: T, field: K) -> HMGetCommand {
+    let mut args = ArgList::new("HMGET");
+    args.push(key);
+    args.push(field);
+    HMGetCommand(args)
+}
+
+/// HMGET command, see [`HMGet`](crate::cmd::HMGet)
+pub struct HMGetCommand(ArgList);
+
+impl HMGetCommand {
+    /// Add a field to this command.
+    pub fn field<K: Arg>(mut self, field: K) -> Self {
+        self.0.push(field);
+        self
+    }
+
+    /// Add more fields to this command.
+    pub fn fields<K: Arg>(mut self, other: impl IntoIterator<Item = K>) -> Self {
+        for field in other {
+            self.0.push(field);
+        }
+        self
+    }
+}
+
+impl Command for HMGetCommand {
+    type Output = Vec<Option<Bytes>>;
+
+    fn encode(self, w: &mut Writer<'_>) {
+        self.0.write(w);
+    }
+
+    fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
+        utils::read_opt_list(frame)
+    }
+}
+
+/// HEXISTS redis command
+///
+/// Returns `true` if `field` exists in the hash stored at `key`.
+pub fn HExists<T: Arg, K: Arg>(key: T, field: K) -> utils::BoolOutputCommand<(&'static str, T, K)> {
+    utils::BoolOutputCommand(("HEXISTS", key, field))
+}
+
+/// HSETNX redis command
+///
+/// Sets `field` in the hash stored at `key` to `value`, only if `field` does
+/// not exist. Returns `true` if the field was set.
+pub fn HSetNx<T: Arg, K: Arg, V: Arg>(
+    key: T,
+    field: K,
+    value: V,
+) -> utils::BoolOutputCommand<(&'static str, T, K, V)> {
+    utils::BoolOutputCommand(("HSETNX", key, field, value))
+}
+
+/// HKEYS redis command
+///
+/// Returns all field names in the hash stored at `key`.
+pub fn HKeys<T: Arg>(key: T) -> utils::ListOutputCommand<(&'static str, T)> {
+    utils::ListOutputCommand(("HKEYS", key))
+}
+
+/// HVALS redis command
+///
+/// Returns all values in the hash stored at `key`.
+pub fn HVals<T: Arg>(key: T) -> utils::ListOutputCommand<(&'static str, T)> {
+    utils::ListOutputCommand(("HVALS", key))
+}
+
+/// HSTRLEN redis command
+///
+/// Returns the length of the value of `field` in the hash stored at `key`,
+/// `0` if the key or the field do not exist.
+pub fn HStrLen<T: Arg, K: Arg>(key: T, field: K) -> utils::IntOutputCommand<(&'static str, T, K)> {
+    utils::IntOutputCommand(("HSTRLEN", key, field))
+}
+
+/// HSCAN redis command
+///
+/// Incrementally iterates over fields and values of the hash stored at `key`.
+/// See [`Scan`](crate::cmd::Scan) for the iteration semantics.
+pub fn HScan<T: Arg>(key: T, cursor: u64) -> utils::ScanCommand<(Bytes, Bytes)> {
+    let mut args = ArgList::new("HSCAN");
+    args.push(key);
+    args.push(cursor);
+    utils::ScanCommand::new(args)
+}
