@@ -1,7 +1,7 @@
 use ntex_bytes::Bytes;
 
 use super::{Command, CommandError, utils};
-use crate::codec::{Arg, ArgList, Frame, Writer};
+use crate::codec::{Arg, Frame, VarArgs, Writer};
 
 /// GET redis command
 ///
@@ -422,16 +422,14 @@ impl<T: Arg> Command for GetExCommand<T> {
 ///     Ok(())
 /// }
 /// ```
-pub fn MGet<T: Arg>(key: T) -> MGetCommand {
-    let mut args = ArgList::new("MGET");
-    args.push(key);
-    MGetCommand(args)
+pub fn MGet<T: Arg>(key: T) -> MGetCommand<T> {
+    MGetCommand(VarArgs::with_head(("MGET", key)))
 }
 
 /// MGET command, see [`MGet`](crate::cmd::MGet)
-pub struct MGetCommand(ArgList);
+pub struct MGetCommand<A>(VarArgs<(&'static str, A)>);
 
-impl MGetCommand {
+impl<A> MGetCommand<A> {
     /// Add a key to this command.
     pub fn key<T: Arg>(mut self, other: T) -> Self {
         self.0.push(other);
@@ -447,7 +445,7 @@ impl MGetCommand {
     }
 }
 
-impl Command for MGetCommand {
+impl<A: Arg> Command for MGetCommand<A> {
     type Output = Vec<Option<Bytes>>;
 
     fn encode(self, w: &mut Writer<'_>) {
@@ -466,17 +464,14 @@ impl Command for MGetCommand {
 /// no key was set because of the `if_not_exists()` condition.
 ///
 /// See [`MGet`] for an example.
-pub fn MSet<T: Arg, V: Arg>(key: T, value: V) -> MSetCommand {
-    let mut args = ArgList::new("MSET");
-    args.push(key);
-    args.push(value);
-    MSetCommand(args)
+pub fn MSet<T: Arg, V: Arg>(key: T, value: V) -> MSetCommand<T, V> {
+    MSetCommand(VarArgs::with_head(("MSET", key, value)))
 }
 
 /// MSET and MSETNX command, see [`MSet`](crate::cmd::MSet)
-pub struct MSetCommand(ArgList);
+pub struct MSetCommand<A, B>(VarArgs<(&'static str, A, B)>);
 
-impl MSetCommand {
+impl<A, B> MSetCommand<A, B> {
     /// Add another key and value to set
     pub fn entry<K: Arg, V: Arg>(mut self, key: K, value: V) -> Self {
         self.add_entry(key, value);
@@ -491,12 +486,12 @@ impl MSetCommand {
 
     /// Set the keys only if none of them exist, changes `MSET` command to `MSETNX`
     pub fn if_not_exists(mut self) -> Self {
-        self.0.set_name("MSETNX");
+        self.0.head_mut().0 = "MSETNX";
         self
     }
 }
 
-impl Command for MSetCommand {
+impl<A: Arg, B: Arg> Command for MSetCommand<A, B> {
     type Output = bool;
 
     fn encode(self, w: &mut Writer<'_>) {

@@ -1,7 +1,7 @@
 use ntex_bytes::Bytes;
 
 use super::{Command, CommandError, utils};
-use crate::codec::{Arg, ArgList, Frame, Writer};
+use crate::codec::{Arg, Frame, VarArgs, Writer};
 
 /// SADD redis command
 ///
@@ -32,7 +32,7 @@ use crate::codec::{Arg, ArgList, Frame, Writer};
 ///     Ok(())
 /// }
 /// ```
-pub fn SAdd<T: Arg, M: Arg>(key: T, member: M) -> MembersCommand {
+pub fn SAdd<T: Arg, M: Arg>(key: T, member: M) -> MembersCommand<T, M> {
     MembersCommand::new("SADD", key, member)
 }
 
@@ -40,20 +40,17 @@ pub fn SAdd<T: Arg, M: Arg>(key: T, member: M) -> MembersCommand {
 ///
 /// Removes the members from the set stored at `key`. Returns the number of
 /// members that were removed. See [`SAdd`] for an example.
-pub fn SRem<T: Arg, M: Arg>(key: T, member: M) -> MembersCommand {
+pub fn SRem<T: Arg, M: Arg>(key: T, member: M) -> MembersCommand<T, M> {
     MembersCommand::new("SREM", key, member)
 }
 
 /// SADD, SREM and ZREM command, see [`SAdd`](crate::cmd::SAdd),
 /// [`SRem`](crate::cmd::SRem) and [`ZRem`](crate::cmd::ZRem)
-pub struct MembersCommand(ArgList);
+pub struct MembersCommand<A, B>(VarArgs<(&'static str, A, B)>);
 
-impl MembersCommand {
-    pub(crate) fn new<T: Arg, M: Arg>(name: &'static str, key: T, member: M) -> Self {
-        let mut args = ArgList::new(name);
-        args.push(key);
-        args.push(member);
-        MembersCommand(args)
+impl<A, B> MembersCommand<A, B> {
+    pub(crate) fn new(name: &'static str, key: A, member: B) -> Self {
+        MembersCommand(VarArgs::with_head((name, key, member)))
     }
 
     /// Add a member to this command.
@@ -71,7 +68,7 @@ impl MembersCommand {
     }
 }
 
-impl Command for MembersCommand {
+impl<A: Arg, B: Arg> Command for MembersCommand<A, B> {
     type Output = usize;
 
     fn encode(self, w: &mut Writer<'_>) {
@@ -103,17 +100,14 @@ pub fn SIsMember<T: Arg, M: Arg>(
 /// SMISMEMBER redis command
 ///
 /// Returns whether each member is a member of the set stored at `key`.
-pub fn SMIsMember<T: Arg, M: Arg>(key: T, member: M) -> SMIsMemberCommand {
-    let mut args = ArgList::new("SMISMEMBER");
-    args.push(key);
-    args.push(member);
-    SMIsMemberCommand(args)
+pub fn SMIsMember<T: Arg, M: Arg>(key: T, member: M) -> SMIsMemberCommand<T, M> {
+    SMIsMemberCommand(VarArgs::with_head(("SMISMEMBER", key, member)))
 }
 
 /// SMISMEMBER command, see [`SMIsMember`](crate::cmd::SMIsMember)
-pub struct SMIsMemberCommand(ArgList);
+pub struct SMIsMemberCommand<A, B>(VarArgs<(&'static str, A, B)>);
 
-impl SMIsMemberCommand {
+impl<A, B> SMIsMemberCommand<A, B> {
     /// Add a member to check.
     pub fn member<M: Arg>(mut self, member: M) -> Self {
         self.0.push(member);
@@ -129,7 +123,7 @@ impl SMIsMemberCommand {
     }
 }
 
-impl Command for SMIsMemberCommand {
+impl<A: Arg, B: Arg> Command for SMIsMemberCommand<A, B> {
     type Output = Vec<bool>;
 
     fn encode(self, w: &mut Writer<'_>) {
@@ -192,14 +186,14 @@ pub fn SRandMember<T: Arg>(key: T) -> utils::BulkOutputCommand<(&'static str, T)
 ///     Ok(())
 /// }
 /// ```
-pub fn SInter<T: Arg>(key: T) -> SetOpCommand {
+pub fn SInter<T: Arg>(key: T) -> SetOpCommand<T> {
     SetOpCommand::new("SINTER", key)
 }
 
 /// SUNION redis command
 ///
 /// Returns the members of the union of all the given sets.
-pub fn SUnion<T: Arg>(key: T) -> SetOpCommand {
+pub fn SUnion<T: Arg>(key: T) -> SetOpCommand<T> {
     SetOpCommand::new("SUNION", key)
 }
 
@@ -207,19 +201,17 @@ pub fn SUnion<T: Arg>(key: T) -> SetOpCommand {
 ///
 /// Returns the members of the difference between the first set and all
 /// the successive sets.
-pub fn SDiff<T: Arg>(key: T) -> SetOpCommand {
+pub fn SDiff<T: Arg>(key: T) -> SetOpCommand<T> {
     SetOpCommand::new("SDIFF", key)
 }
 
 /// SINTER, SUNION and SDIFF command, see [`SInter`](crate::cmd::SInter),
 /// [`SUnion`](crate::cmd::SUnion) and [`SDiff`](crate::cmd::SDiff)
-pub struct SetOpCommand(ArgList);
+pub struct SetOpCommand<A>(VarArgs<(&'static str, A)>);
 
-impl SetOpCommand {
-    fn new<T: Arg>(name: &'static str, key: T) -> Self {
-        let mut args = ArgList::new(name);
-        args.push(key);
-        SetOpCommand(args)
+impl<A> SetOpCommand<A> {
+    fn new(name: &'static str, key: A) -> Self {
+        SetOpCommand(VarArgs::with_head((name, key)))
     }
 
     /// Add a key to this command.
@@ -237,7 +229,7 @@ impl SetOpCommand {
     }
 }
 
-impl Command for SetOpCommand {
+impl<A: Arg> Command for SetOpCommand<A> {
     type Output = Vec<Bytes>;
 
     fn encode(self, w: &mut Writer<'_>) {
@@ -253,9 +245,6 @@ impl Command for SetOpCommand {
 ///
 /// Incrementally iterates over members of the set stored at `key`.
 /// See [`Scan`](crate::cmd::Scan) for the iteration semantics.
-pub fn SScan<T: Arg>(key: T, cursor: u64) -> utils::ScanCommand<Bytes> {
-    let mut args = ArgList::new("SSCAN");
-    args.push(key);
-    args.push(cursor);
-    utils::ScanCommand::new(args)
+pub fn SScan<T: Arg>(key: T, cursor: u64) -> utils::ScanCommand<Bytes, T> {
+    utils::ScanCommand::new("SSCAN", Some(key), cursor)
 }

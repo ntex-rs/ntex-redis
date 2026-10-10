@@ -1,7 +1,7 @@
 use ntex_bytes::Bytes;
 
 use super::{Command, CommandError, sets::MembersCommand, utils};
-use crate::codec::{Arg, ArgList, Frame, Writer};
+use crate::codec::{Arg, Frame, VarArgs, Writer};
 
 /// ZADD redis command
 ///
@@ -34,13 +34,10 @@ use crate::codec::{Arg, ArgList, Frame, Writer};
 ///     Ok(())
 /// }
 /// ```
-pub fn ZAdd<T: Arg, M: Arg>(key: T, score: f64, member: M) -> ZAddCommand<T> {
-    let mut entries = ArgList::new("ZADD");
-    entries.push(score);
-    entries.push(member);
+pub fn ZAdd<T: Arg, M: Arg>(key: T, score: f64, member: M) -> ZAddCommand<T, M> {
     ZAddCommand {
         key,
-        entries,
+        entries: VarArgs::with_head((score, member)),
         cond: None,
         cmp: None,
         ch: false,
@@ -48,23 +45,23 @@ pub fn ZAdd<T: Arg, M: Arg>(key: T, score: f64, member: M) -> ZAddCommand<T> {
 }
 
 /// ZADD command, see [`ZAdd`](crate::cmd::ZAdd)
-pub struct ZAddCommand<T> {
+pub struct ZAddCommand<T, M> {
     key: T,
-    entries: ArgList,
+    entries: VarArgs<(f64, M)>,
     cond: Option<&'static str>,
     cmp: Option<&'static str>,
     ch: bool,
 }
 
-impl<T> ZAddCommand<T> {
+impl<T, M> ZAddCommand<T, M> {
     /// Add another member with score
-    pub fn entry<M: Arg>(mut self, score: f64, member: M) -> Self {
+    pub fn entry<M2: Arg>(mut self, score: f64, member: M2) -> Self {
         self.add_entry(score, member);
         self
     }
 
     /// Add another member with score, by mutable reference
-    pub fn add_entry<M: Arg>(&mut self, score: f64, member: M) {
+    pub fn add_entry<M2: Arg>(&mut self, score: f64, member: M2) {
         self.entries.push(score);
         self.entries.push(member);
     }
@@ -100,7 +97,7 @@ impl<T> ZAddCommand<T> {
     }
 }
 
-impl<T: Arg> Command for ZAddCommand<T> {
+impl<T: Arg, M: Arg> Command for ZAddCommand<T, M> {
     type Output = usize;
 
     fn encode(self, w: &mut Writer<'_>) {
@@ -131,7 +128,7 @@ impl<T: Arg> Command for ZAddCommand<T> {
 ///
 /// Removes the members from the sorted set stored at `key`. Returns
 /// the number of members that were removed.
-pub fn ZRem<T: Arg, M: Arg>(key: T, member: M) -> MembersCommand {
+pub fn ZRem<T: Arg, M: Arg>(key: T, member: M) -> MembersCommand<T, M> {
     MembersCommand::new("ZREM", key, member)
 }
 
@@ -239,27 +236,37 @@ impl<T: Arg, M: Arg> Command for ZRankCommand<T, M> {
 /// and `stop`. By default `start` and `stop` are inclusive ranks, use
 /// [`ZRangeCommand::by_score`] or [`ZRangeCommand::by_lex`] to select
 /// members by score or lexicographical range. See [`ZAdd`] for an example.
-pub fn ZRange<T: Arg, A: Arg, B: Arg>(key: T, start: A, stop: B) -> ZRangeCommand {
-    let mut args = ArgList::new("ZRANGE");
-    args.push(key);
-    args.push(start);
-    args.push(stop);
-    ZRangeCommand(args)
+pub fn ZRange<T: Arg, A: Arg, B: Arg>(key: T, start: A, stop: B) -> ZRangeCommand<T, A, B> {
+    ZRangeCommand {
+        key,
+        start,
+        stop,
+        by: None,
+        rev: false,
+        limit: None,
+    }
 }
 
 /// ZRANGE command, see [`ZRange`](crate::cmd::ZRange)
-pub struct ZRangeCommand(ArgList);
+pub struct ZRangeCommand<T, A, B> {
+    key: T,
+    start: A,
+    stop: B,
+    by: Option<&'static str>,
+    rev: bool,
+    limit: Option<(usize, i64)>,
+}
 
-impl ZRangeCommand {
+impl<T, A, B> ZRangeCommand<T, A, B> {
     /// Treat `start` and `stop` as scores, e.g. `1.5`, `"(1.5"` or `"-inf"`
     pub fn by_score(mut self) -> Self {
-        self.0.push("BYSCORE");
+        self.by = Some("BYSCORE");
         self
     }
 
     /// Treat `start` and `stop` as lexicographical bounds, e.g. `"[a"`, `"(b"` or `"-"`
     pub fn by_lex(mut self) -> Self {
-        self.0.push("BYLEX");
+        self.by = Some("BYLEX");
         self
     }
 
@@ -267,31 +274,57 @@ impl ZRangeCommand {
     ///
     /// With score or lexicographical range, `start` must be the higher bound.
     pub fn rev(mut self) -> Self {
-        self.0.push("REV");
+        self.rev = true;
         self
     }
 
     /// Return `count` members starting at `offset`, requires score or
     /// lexicographical range. Negative `count` returns all members from `offset`.
     pub fn limit(mut self, offset: usize, count: i64) -> Self {
-        self.0.push("LIMIT");
-        self.0.push(offset);
-        self.0.push(count);
+        self.limit = Some((offset, count));
         self
     }
 
     /// Return members together with their scores
-    pub fn with_scores(mut self) -> ZRangeWithScoresCommand {
-        self.0.push("WITHSCORES");
-        ZRangeWithScoresCommand(self.0)
+    pub fn with_scores(self) -> ZRangeWithScoresCommand<T, A, B> {
+        ZRangeWithScoresCommand(self)
     }
 }
 
-impl Command for ZRangeCommand {
+impl<T: Arg, A: Arg, B: Arg> ZRangeCommand<T, A, B> {
+    fn write(self, w: &mut Writer<'_>, with_scores: bool) {
+        w.array(
+            4 + usize::from(self.by.is_some())
+                + usize::from(self.rev)
+                + if self.limit.is_some() { 3 } else { 0 }
+                + usize::from(with_scores),
+        );
+        w.arg("ZRANGE");
+        w.arg(self.key);
+        w.arg(self.start);
+        w.arg(self.stop);
+        if let Some(by) = self.by {
+            w.arg(by);
+        }
+        if self.rev {
+            w.arg("REV");
+        }
+        if let Some((offset, count)) = self.limit {
+            w.arg("LIMIT");
+            w.arg(offset);
+            w.arg(count);
+        }
+        if with_scores {
+            w.arg("WITHSCORES");
+        }
+    }
+}
+
+impl<T: Arg, A: Arg, B: Arg> Command for ZRangeCommand<T, A, B> {
     type Output = Vec<Bytes>;
 
     fn encode(self, w: &mut Writer<'_>) {
-        self.0.write(w);
+        self.write(w, false);
     }
 
     fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
@@ -300,13 +333,13 @@ impl Command for ZRangeCommand {
 }
 
 /// ZRANGE command with scores, see [`ZRangeCommand::with_scores`]
-pub struct ZRangeWithScoresCommand(ArgList);
+pub struct ZRangeWithScoresCommand<T, A, B>(ZRangeCommand<T, A, B>);
 
-impl Command for ZRangeWithScoresCommand {
+impl<T: Arg, A: Arg, B: Arg> Command for ZRangeWithScoresCommand<T, A, B> {
     type Output = Vec<(Bytes, f64)>;
 
     fn encode(self, w: &mut Writer<'_>) {
-        self.0.write(w);
+        self.0.write(w, true);
     }
 
     fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
@@ -374,9 +407,6 @@ impl<T: Arg> Command for ZPopCommand<T> {
 ///
 /// Incrementally iterates over members and scores of the sorted set stored
 /// at `key`. See [`Scan`](crate::cmd::Scan) for the iteration semantics.
-pub fn ZScan<T: Arg>(key: T, cursor: u64) -> utils::ScanCommand<(Bytes, f64)> {
-    let mut args = ArgList::new("ZSCAN");
-    args.push(key);
-    args.push(cursor);
-    utils::ScanCommand::new(args)
+pub fn ZScan<T: Arg>(key: T, cursor: u64) -> utils::ScanCommand<(Bytes, f64), T> {
+    utils::ScanCommand::new("ZSCAN", Some(key), cursor)
 }
