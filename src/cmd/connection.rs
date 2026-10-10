@@ -1,7 +1,7 @@
 use ntex_bytes::ByteString;
 
 use super::{Command, CommandError};
-use crate::codec::{Request, Response};
+use crate::codec::{Response, Writer};
 
 /// SELECT redis command
 ///
@@ -24,20 +24,17 @@ use crate::codec::{Request, Response};
 /// }
 /// ```
 pub fn Select(db: u32) -> SelectCommand {
-    SelectCommand(Request::Array(vec![
-        Request::from_static("SELECT"),
-        Request::BulkInteger(db as i64),
-    ]))
+    SelectCommand(db)
 }
 
 /// SELECT command, see [`Select`](crate::cmd::Select)
-pub struct SelectCommand(Request);
+pub struct SelectCommand(u32);
 
 impl Command for SelectCommand {
     type Output = bool;
 
-    fn to_request(self) -> Request {
-        self.0
+    fn encode(self, w: &mut Writer<'_>) {
+        w.args(("SELECT", self.0));
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
@@ -69,17 +66,17 @@ impl Command for SelectCommand {
 /// }
 /// ```
 pub fn Ping() -> PingCommand {
-    PingCommand(Request::Array(vec![Request::from_static("PING")]))
+    PingCommand
 }
 
 /// PING command, see [`Ping`](crate::cmd::Ping)
-pub struct PingCommand(Request);
+pub struct PingCommand;
 
 impl Command for PingCommand {
     type Output = ByteString;
 
-    fn to_request(self) -> Request {
-        self.0
+    fn encode(self, w: &mut Writer<'_>) {
+        w.args(("PING",));
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
@@ -111,17 +108,17 @@ impl Command for PingCommand {
 /// }
 /// ```
 pub fn Reset() -> ResetCommand {
-    ResetCommand(Request::Array(vec![Request::from_static("RESET")]))
+    ResetCommand
 }
 
 /// RESET command, see [`Reset`](crate::cmd::Reset)
-pub struct ResetCommand(Request);
+pub struct ResetCommand;
 
 impl Command for ResetCommand {
     type Output = ByteString;
 
-    fn to_request(self) -> Request {
-        self.0
+    fn encode(self, w: &mut Writer<'_>) {
+        w.args(("RESET",));
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {

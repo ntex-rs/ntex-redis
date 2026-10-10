@@ -1,5 +1,5 @@
 use super::{Command, CommandError};
-use crate::codec::{BulkString, Request, Response};
+use crate::codec::{Arg, Response, Writer};
 
 /// AUTH redis command
 ///
@@ -7,24 +7,18 @@ use crate::codec::{BulkString, Request, Response};
 ///
 /// Use [`RedisConnector::password`](crate::RedisConnector::password) to
 /// authenticate new connections automatically.
-pub fn Auth<T>(password: T) -> AuthCommand
-where
-    BulkString: From<T>,
-{
-    AuthCommand(Request::Array(vec![
-        Request::from_static("AUTH"),
-        Request::BulkString(password.into()),
-    ]))
+pub fn Auth<T: Arg>(password: T) -> AuthCommand<T> {
+    AuthCommand(password)
 }
 
 /// AUTH command, see [`Auth`](crate::cmd::Auth)
-pub struct AuthCommand(Request);
+pub struct AuthCommand<T>(T);
 
-impl Command for AuthCommand {
+impl<T: Arg> Command for AuthCommand<T> {
     type Output = bool;
 
-    fn to_request(self) -> Request {
-        self.0
+    fn encode(self, w: &mut Writer<'_>) {
+        w.args(("AUTH", self.0));
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {

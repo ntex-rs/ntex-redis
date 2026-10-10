@@ -2,7 +2,7 @@ use std::pin::Pin;
 use std::{future::poll_fn, task::Context, task::Poll, task::ready};
 
 use super::cmd::{Command, commands::PubSubCommand, commands::SubscribeOutputCommand};
-use super::codec::Codec;
+use super::codec::{Codec, Writer};
 use super::errors::{CommandError, Error};
 use ntex_io::{IoBoxed, RecvError};
 use ntex_util::Stream;
@@ -47,8 +47,9 @@ impl SimpleClient {
     where
         U: Command,
     {
-        self.io.encode(cmd.to_request(), &Codec)?;
-        Ok(())
+        self.io
+            .with_write_src(|buf| cmd.encode(&mut Writer::new(buf)))
+            .map_err(|e| CommandError::Protocol(e.into()))
     }
 
     /// Execute subscribe command and switch the connection to subscription mode

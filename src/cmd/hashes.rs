@@ -4,7 +4,7 @@ use ntex_bytes::Bytes;
 use ntex_util::HashMap;
 
 use super::{Command, CommandError, utils};
-use crate::codec::{BulkString, Request, Response};
+use crate::codec::{Arg, ArgList, Response, Writer};
 
 /// HGET redis command
 ///
@@ -32,15 +32,8 @@ use crate::codec::{BulkString, Request, Response};
 ///     Ok(())
 /// }
 /// ```
-pub fn HGet<T, V>(key: T, field: V) -> utils::BulkOutputCommand
-where
-    BulkString: From<T> + From<V>,
-{
-    utils::BulkOutputCommand(Request::Array(vec![
-        Request::from_static("HGET"),
-        Request::BulkString(key.into()),
-        Request::BulkString(field.into()),
-    ]))
+pub fn HGet<T: Arg, V: Arg>(key: T, field: V) -> utils::BulkOutputCommand<(&'static str, T, V)> {
+    utils::BulkOutputCommand(("HGET", key, field))
 }
 
 /// HGETALL redis command
@@ -70,24 +63,18 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub fn HGetAll<T>(key: T) -> HGetAllCommand
-where
-    BulkString: From<T>,
-{
-    HGetAllCommand(vec![
-        Request::from_static("HGETALL"),
-        Request::BulkString(key.into()),
-    ])
+pub fn HGetAll<T: Arg>(key: T) -> HGetAllCommand<T> {
+    HGetAllCommand(key)
 }
 
 /// HGETALL command, see [`HGetAll`](crate::cmd::HGetAll)
-pub struct HGetAllCommand(Vec<Request>);
+pub struct HGetAllCommand<T>(T);
 
-impl Command for HGetAllCommand {
+impl<T: Arg> Command for HGetAllCommand<T> {
     type Output = HashMap<Bytes, Bytes>;
 
-    fn to_request(self) -> Request {
-        Request::Array(self.0)
+    fn encode(self, w: &mut Writer<'_>) {
+        w.args(("HGETALL", self.0));
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
@@ -122,47 +109,36 @@ impl Command for HGetAllCommand {
 ///     Ok(())
 /// }
 /// ```
-pub fn HSet<T, K, V>(key: T, field: K, value: V) -> HSetCommand
-where
-    BulkString: From<T> + From<K> + From<V>,
-{
-    HSetCommand(vec![
-        Request::from_static("HSET"),
-        Request::BulkString(key.into()),
-        Request::BulkString(field.into()),
-        Request::BulkString(value.into()),
-    ])
+pub fn HSet<T: Arg, K: Arg, V: Arg>(key: T, field: K, value: V) -> HSetCommand {
+    let mut args = ArgList::new("HSET");
+    args.push(key);
+    args.push(field);
+    args.push(value);
+    HSetCommand(args)
 }
 
 /// HSET command, see [`HSet`](crate::cmd::HSet)
-pub struct HSetCommand(Vec<Request>);
+pub struct HSetCommand(ArgList);
 
 impl HSetCommand {
     /// Add another field and value to set
-    pub fn entry<K, V>(mut self, field: K, value: V) -> Self
-    where
-        BulkString: From<K> + From<V>,
-    {
-        self.0.push(field.into());
-        self.0.push(value.into());
+    pub fn entry<K: Arg, V: Arg>(mut self, field: K, value: V) -> Self {
+        self.add_entry(field, value);
         self
     }
 
     /// Add another field and value to set, by mutable reference
-    pub fn add_entry<K, V>(&mut self, field: K, value: V)
-    where
-        BulkString: From<K> + From<V>,
-    {
-        self.0.push(field.into());
-        self.0.push(value.into());
+    pub fn add_entry<K: Arg, V: Arg>(&mut self, field: K, value: V) {
+        self.0.push(field);
+        self.0.push(value);
     }
 }
 
 impl Command for HSetCommand {
     type Output = usize;
 
-    fn to_request(self) -> Request {
-        Request::Array(self.0)
+    fn encode(self, w: &mut Writer<'_>) {
+        self.0.write(w);
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
@@ -200,36 +176,28 @@ impl Command for HSetCommand {
 ///     Ok(())
 /// }
 /// ```
-pub fn HDel<T, K>(key: T, field: K) -> HDelCommand
-where
-    BulkString: From<T> + From<K>,
-{
-    HDelCommand(vec![
-        Request::from_static("HDEL"),
-        Request::BulkString(key.into()),
-        Request::BulkString(field.into()),
-    ])
+pub fn HDel<T: Arg, K: Arg>(key: T, field: K) -> HDelCommand {
+    let mut args = ArgList::new("HDEL");
+    args.push(key);
+    args.push(field);
+    HDelCommand(args)
 }
 
 /// HDEL command, see [`HDel`](crate::cmd::HDel)
-pub struct HDelCommand(Vec<Request>);
+pub struct HDelCommand(ArgList);
 
 impl HDelCommand {
     /// Add another field to remove
-    pub fn remove<K>(mut self, field: K) -> Self
-    where
-        BulkString: From<K>,
-    {
-        self.0.push(field.into());
+    pub fn remove<K: Arg>(mut self, field: K) -> Self {
+        self.0.push(field);
         self
     }
 
     /// Add more fields to remove
-    pub fn remove_all<T>(mut self, other: impl IntoIterator<Item = T>) -> Self
-    where
-        BulkString: From<T>,
-    {
-        self.0.extend(other.into_iter().map(|t| t.into()));
+    pub fn remove_all<T: Arg>(mut self, other: impl IntoIterator<Item = T>) -> Self {
+        for field in other {
+            self.0.push(field);
+        }
         self
     }
 }
@@ -237,8 +205,8 @@ impl HDelCommand {
 impl Command for HDelCommand {
     type Output = usize;
 
-    fn to_request(self) -> Request {
-        Request::Array(self.0)
+    fn encode(self, w: &mut Writer<'_>) {
+        self.0.write(w);
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
@@ -275,14 +243,8 @@ impl Command for HDelCommand {
 ///     Ok(())
 /// }
 /// ```
-pub fn HLen<T>(key: T) -> utils::IntOutputCommand
-where
-    BulkString: From<T>,
-{
-    utils::IntOutputCommand(Request::Array(vec![
-        Request::from_static("HLEN"),
-        Request::BulkString(key.into()),
-    ]))
+pub fn HLen<T: Arg>(key: T) -> utils::IntOutputCommand<(&'static str, T)> {
+    utils::IntOutputCommand(("HLEN", key))
 }
 
 /// HINCRBY redis command
@@ -310,15 +272,15 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub fn HIncrBy<T, K, I>(key: T, field: K, increment: I) -> utils::IntOutputCommand
+pub fn HIncrBy<T, K, I>(
+    key: T,
+    field: K,
+    increment: I,
+) -> utils::IntOutputCommand<(&'static str, T, K, i64)>
 where
-    BulkString: From<T> + From<K>,
+    T: Arg,
+    K: Arg,
     i64: From<I>,
 {
-    utils::IntOutputCommand(Request::Array(vec![
-        Request::from_static("HINCRBY"),
-        Request::BulkString(key.into()),
-        Request::BulkString(field.into()),
-        Request::BulkInteger(i64::from(increment)),
-    ]))
+    utils::IntOutputCommand(("HINCRBY", key, field, i64::from(increment)))
 }

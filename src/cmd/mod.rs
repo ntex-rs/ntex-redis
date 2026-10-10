@@ -1,7 +1,7 @@
 //! Redis commands
 #![allow(non_snake_case, clippy::wrong_self_convention)]
 
-use super::codec::{Request, Response};
+use super::codec::{Response, Writer};
 use super::errors::CommandError;
 
 mod auth;
@@ -31,7 +31,7 @@ pub use self::strings::{Get, IncrBy, Set};
 /// to add commands that are not provided by this crate.
 ///
 /// ```rust
-/// use ntex_redis::{array, cmd::Command, codec::{Request, Response}, errors::CommandError};
+/// use ntex_redis::{cmd::Command, codec::{Response, Writer}, errors::CommandError};
 ///
 /// /// STRLEN redis command
 /// struct StrLen(String);
@@ -39,8 +39,8 @@ pub use self::strings::{Get, IncrBy, Set};
 /// impl Command for StrLen {
 ///     type Output = i64;
 ///
-///     fn to_request(self) -> Request {
-///         array!["STRLEN", self.0]
+///     fn encode(self, w: &mut Writer<'_>) {
+///         w.args(("STRLEN", self.0));
 ///     }
 ///
 ///     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
@@ -55,8 +55,10 @@ pub trait Command {
     /// Command output type
     type Output;
 
-    /// Convert command to a redis request
-    fn to_request(self) -> Request;
+    /// Write the command request
+    ///
+    /// The request must be a single array of bulk strings, see [`Writer`].
+    fn encode(self, w: &mut Writer<'_>);
 
     /// Create command response from a redis response
     fn to_output(val: Response) -> Result<Self::Output, CommandError>;

@@ -1,5 +1,5 @@
 use super::{Command, CommandError, utils};
-use crate::codec::{BulkString, Request, Response};
+use crate::codec::{Arg, ArgList, Response, Writer};
 
 /// LINDEX redis command
 ///
@@ -27,15 +27,8 @@ use crate::codec::{BulkString, Request, Response};
 ///     Ok(())
 /// }
 /// ```
-pub fn LIndex<T>(key: T, index: i64) -> utils::BulkOutputCommand
-where
-    BulkString: From<T>,
-{
-    utils::BulkOutputCommand(Request::Array(vec![
-        Request::from_static("LINDEX"),
-        Request::BulkString(key.into()),
-        Request::BulkInteger(index),
-    ]))
+pub fn LIndex<T: Arg>(key: T, index: i64) -> utils::BulkOutputCommand<(&'static str, T, i64)> {
+    utils::BulkOutputCommand(("LINDEX", key, index))
 }
 
 /// LPOP redis command
@@ -64,14 +57,8 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub fn LPop<T>(key: T) -> utils::BulkOutputCommand
-where
-    BulkString: From<T>,
-{
-    utils::BulkOutputCommand(Request::Array(vec![
-        Request::from_static("LPOP"),
-        Request::BulkString(key.into()),
-    ]))
+pub fn LPop<T: Arg>(key: T) -> utils::BulkOutputCommand<(&'static str, T)> {
+    utils::BulkOutputCommand(("LPOP", key))
 }
 
 /// RPOP redis command
@@ -100,14 +87,8 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub fn RPop<T>(key: T) -> utils::BulkOutputCommand
-where
-    BulkString: From<T>,
-{
-    utils::BulkOutputCommand(Request::Array(vec![
-        Request::from_static("RPOP"),
-        Request::BulkString(key.into()),
-    ]))
+pub fn RPop<T: Arg>(key: T) -> utils::BulkOutputCommand<(&'static str, T)> {
+    utils::BulkOutputCommand(("RPOP", key))
 }
 
 /// LPUSH redis command
@@ -161,15 +142,8 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub fn LPush<T, V>(key: T, value: V) -> LPushCommand
-where
-    BulkString: From<T> + From<V>,
-{
-    LPushCommand(vec![
-        Request::from_static("LPUSH"),
-        Request::BulkString(key.into()),
-        Request::BulkString(value.into()),
-    ])
+pub fn LPush<T: Arg, V: Arg>(key: T, value: V) -> LPushCommand {
+    LPushCommand::new("LPUSH", key, value)
 }
 
 /// RPUSH redis command
@@ -201,51 +175,42 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub fn RPush<T, V>(key: T, value: V) -> LPushCommand
-where
-    BulkString: From<T> + From<V>,
-{
-    LPushCommand(vec![
-        Request::from_static("RPUSH"),
-        Request::BulkString(key.into()),
-        Request::BulkString(value.into()),
-    ])
+pub fn RPush<T: Arg, V: Arg>(key: T, value: V) -> LPushCommand {
+    LPushCommand::new("RPUSH", key, value)
 }
 
 /// LPUSH and RPUSH command, see [`LPush`] and [`RPush`]
-pub struct LPushCommand(Vec<Request>);
+pub struct LPushCommand(ArgList);
 
 impl LPushCommand {
+    fn new<T: Arg, V: Arg>(name: &'static str, key: T, value: V) -> Self {
+        let mut args = ArgList::new(name);
+        args.push(key);
+        args.push(value);
+        LPushCommand(args)
+    }
+
     /// Inserts specified values only if key already exists and holds a list.
     pub fn if_exists(mut self) -> Self {
-        let cmd = if let Request::BulkStatic(ref s) = self.0[0] {
-            if s == b"LPUSH" || s == b"LPUSHX" {
-                "LPUSHX"
-            } else {
-                "RPUSHX"
-            }
-        } else {
-            "LPUSHX"
+        let cmd = match self.0.name() {
+            "LPUSH" | "LPUSHX" => "LPUSHX",
+            _ => "RPUSHX",
         };
-        self.0[0] = Request::from_static(cmd);
+        self.0.set_name(cmd);
         self
     }
 
     /// Add a value to this command.
-    pub fn value<T>(mut self, other: T) -> Self
-    where
-        BulkString: From<T>,
-    {
-        self.0.push(other.into());
+    pub fn value<T: Arg>(mut self, other: T) -> Self {
+        self.0.push(other);
         self
     }
 
     /// Add more values to this command.
-    pub fn extend<T>(mut self, other: impl IntoIterator<Item = T>) -> Self
-    where
-        BulkString: From<T>,
-    {
-        self.0.extend(other.into_iter().map(|t| t.into()));
+    pub fn extend<T: Arg>(mut self, other: impl IntoIterator<Item = T>) -> Self {
+        for val in other {
+            self.0.push(val);
+        }
         self
     }
 }
@@ -253,8 +218,8 @@ impl LPushCommand {
 impl Command for LPushCommand {
     type Output = usize;
 
-    fn to_request(self) -> Request {
-        Request::Array(self.0)
+    fn encode(self, w: &mut Writer<'_>) {
+        self.0.write(w);
     }
 
     fn to_output(val: Response) -> Result<Self::Output, CommandError> {
