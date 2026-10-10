@@ -17,77 +17,41 @@ jobs:
 
     services:
       redis:
-        image: redis:7.0.2
+        image: redis:7
         ports:
           - 6379:6379
-        options: --entrypoint redis-server
 
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@nextest
 
       - name: Install ${{ matrix.version }}
-        uses: actions-rs/toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: ${{ matrix.version }}-x86_64-unknown-linux-gnu
-          profile: minimal
-          override: true
 
       - name: Generate Cargo.lock
-        uses: actions-rs/cargo@v1
-        with:
-          command: generate-lockfile
+        run: cargo generate-lockfile
 
-      - name: Cache cargo registry
-        uses: actions/cache@v1
-        with:
-          path: ~/.cargo/registry
-          key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-cargo-registry-trimmed-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
 
-      - name: Cache cargo index
-        uses: actions/cache@v1
-        with:
-          path: ~/.cargo/git
-          key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-cargo-index-trimmed-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo tarpaulin
-        if: matrix.version == '1.97.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
-        uses: actions/cache@v1
-        with:
-          path: ~/.cargo/bin
-          key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-tarpaulin
-
-      - name: Run tests
-        uses: actions-rs/cargo@v1
-        timeout-minutes: 40
-        with:
-          command: test
-          args: --all --all-features --no-fail-fast -- --nocapture
-
-      - name: Install tarpaulin
-        if: matrix.version == '1.97.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
-        continue-on-error: true
+      - name: Run tests [tokio]
+        timeout-minutes: 10
         run: |
-          cargo install cargo-tarpaulin
+          cargo nextest run --retries=3 --all --features="ntex/tokio"
 
-      - name: Generate coverage report
-        if: matrix.version == '1.97.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
-        continue-on-error: true
+      - name: Run tests [neon-polling]
+        timeout-minutes: 10
         run: |
-          cargo tarpaulin --out Xml --all --all-features
+          cargo nextest run --retries=3 --all --features="ntex/neon-polling"
 
-      - name: Upload to Codecov
-        if: matrix.version == '1.97.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
-        continue-on-error: true
-        uses: codecov/codecov-action@v1
-        with:
-          file: cobertura.xml
-
-      - name: Install cargo-cache
-        continue-on-error: true
+      - name: Run tests [neon-uring]
+        timeout-minutes: 10
         run: |
-          cargo install cargo-cache --no-default-features --features ci-autoclean
+          cargo nextest run --retries=3 --all --features="ntex/neon-uring"
 
-      - name: Clear the cargo caches
-        continue-on-error: true
+      - name: Run doc tests
+        timeout-minutes: 10
         run: |
-          cargo-cache
+          cargo test --doc --features="ntex/tokio"
