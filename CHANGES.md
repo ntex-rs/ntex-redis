@@ -1,6 +1,6 @@
 # Changes
 
-## [3.0.0] - 2026-xx-xx
+## [3.0.0] - 2026-10-11
 
 * Migrate to ntex 4, depend on individual ntex crates instead of `ntex`
 
@@ -18,39 +18,53 @@
 
 * Fix decoder corrupting stream when an array response arrives in multiple reads
 
-* Faster decoding of large array responses, bulk string payloads are skipped by length
+* Faster decoding of large array responses, bulk string payloads are skipped by
+  length
 
-* Fix `UnSubscribe(None)`, `SUnSubscribe(None)` and `PUnSubscribe(None)` requests
+* Fix `UnSubscribe(None)`, `SUnSubscribe(None)` and `PUnSubscribe(None)`
+  requests
 
-* Fix `Client::flushdb()` desyncing responses, non-array requests are sent as an array
+* Fix `Client::flushdb()` desyncing responses, non-array requests are sent as an
+  array
 
-* `Command::to_request()` replaced with `Command::encode()`, commands are written directly to the write buffer without intermediate allocations
+* `Command::to_request()` replaced with `Command::encode()`, commands are
+  written directly to the write buffer without intermediate allocations
 
-* Add `codec::Writer`, `codec::Arg` and `codec::Args`, command arguments accept `Arg` types instead of `BulkString: From<T>`
+* Add `codec::Writer`, `codec::Arg` and `codec::Args`, command arguments accept
+  `Arg` types instead of `BulkString: From<T>`
 
-* `Command::to_output()` replaced with `Command::decode()`, responses are decoded directly into command outputs without intermediate `Response` values
+* `Command::to_output()` replaced with `Command::decode()`, responses are
+  decoded directly into command outputs without intermediate `Response` values
 
 * Add `codec::Frame` response reader
 
-* `Codec` is stateful, decoder resumes scanning of a partially received response, use `Codec::new()`
+* `Codec` is stateful, decoder resumes scanning of a partially received
+  response, use `Codec::new()`
 
 * Decoder reserves read buffer capacity for large responses
 
 * `Client::exec()` and `SimpleClient::send()` report write errors
 
-* Add string commands: `INCR`, `DECR`, `DECRBY`, `INCRBYFLOAT`, `APPEND`, `STRLEN`, `GETDEL`, `GETEX`, `GETRANGE`, `SETRANGE`, `MGET`, `MSET`, `MSETNX`
+* Add string commands: `INCR`, `DECR`, `DECRBY`, `INCRBYFLOAT`, `APPEND`,
+  `STRLEN`, `GETDEL`, `GETEX`, `GETRANGE`, `SETRANGE`, `MGET`, `MSET`, `MSETNX`
 
-* Add key commands: `UNLINK`, `TOUCH`, `PEXPIRE`, `PEXPIREAT`, `PERSIST`, `PTTL`, `TYPE`, `RENAME`, `RENAMENX`, `SCAN`
+* Add key commands: `UNLINK`, `TOUCH`, `PEXPIRE`, `PEXPIREAT`, `PERSIST`,
+  `PTTL`, `TYPE`, `RENAME`, `RENAMENX`, `SCAN`
 
-* Add list commands: `LLEN`, `LRANGE`, `LREM`, `LSET`, `LTRIM`, `LINSERT`, `LPOS`, `LMOVE`
+* Add list commands: `LLEN`, `LRANGE`, `LREM`, `LSET`, `LTRIM`, `LINSERT`,
+  `LPOS`, `LMOVE`
 
-* Add hash commands: `HMGET`, `HEXISTS`, `HSETNX`, `HKEYS`, `HVALS`, `HSTRLEN`, `HINCRBYFLOAT`, `HSCAN`
+* Add hash commands: `HMGET`, `HEXISTS`, `HSETNX`, `HKEYS`, `HVALS`, `HSTRLEN`,
+  `HINCRBYFLOAT`, `HSCAN`
 
-* Add set commands: `SADD`, `SREM`, `SMEMBERS`, `SISMEMBER`, `SMISMEMBER`, `SCARD`, `SPOP`, `SRANDMEMBER`, `SINTER`, `SUNION`, `SDIFF`, `SSCAN`
+* Add set commands: `SADD`, `SREM`, `SMEMBERS`, `SISMEMBER`, `SMISMEMBER`,
+  `SCARD`, `SPOP`, `SRANDMEMBER`, `SINTER`, `SUNION`, `SDIFF`, `SSCAN`
 
-* Add sorted set commands: `ZADD`, `ZREM`, `ZSCORE`, `ZINCRBY`, `ZCARD`, `ZCOUNT`, `ZRANK`, `ZREVRANK`, `ZRANGE`, `ZPOPMIN`, `ZPOPMAX`, `ZSCAN`
+* Add sorted set commands: `ZADD`, `ZREM`, `ZSCORE`, `ZINCRBY`, `ZCARD`,
+  `ZCOUNT`, `ZRANK`, `ZREVRANK`, `ZRANGE`, `ZPOPMIN`, `ZPOPMAX`, `ZSCAN`
 
-* Add server and connection commands: `FLUSHDB`, `FLUSHALL`, `DBSIZE`, `INFO`, `ECHO`, `CLIENT SETNAME`, `CLIENT GETNAME`
+* Add server and connection commands: `FLUSHDB`, `FLUSHALL`, `DBSIZE`, `INFO`,
+  `ECHO`, `CLIENT SETNAME`, `CLIENT GETNAME`
 
 * Add `EXAT` and `PXAT` options to `SET`
 
@@ -58,15 +72,26 @@
 
 * `f32` and `f64` implement `codec::Arg`, add `Frame::float()`
 
+* Integral `f32` and `f64` arguments are written as integers, scores are parsed
+  without allocation
+
+* Variadic commands (`DEL`, `MGET`, `MSET`, `HSET`, `HDEL`, `HMGET`, `LPUSH`,
+  `SADD`, `ZADD`, etc.) write initial arguments inline and allocate buffer only
+  for additional arguments, command types are generic over initial arguments
+
+* `LPOS`, `ZRANGE` and `SCAN` family commands store options as typed fields
+
 * Fix `RedisConnector` not trying next password when `AUTH` is rejected
 
-* Fix `Client::flushdb()` and `Client` service calls hanging after connection is closed
+* Fix `Client::flushdb()` and `Client` service calls hanging after connection is
+  closed
 
 * `TryFrom<Response> for ByteString` returns original bytes on invalid utf-8
 
 * Fix integer conversion error messages
 
-* Avoid string allocation for integer arguments of `IncrBy`, `HIncrBy`, `Expire` and `ExpireAt`
+* Avoid string allocation for integer arguments of `IncrBy`, `HIncrBy`, `Expire`
+  and `ExpireAt`
 
 * Export `SelectCommand`, `PingCommand`, `ResetCommand`, `BoolOutputCommand` and
   `UnSubscribeOutputCommand` from `cmd::commands`

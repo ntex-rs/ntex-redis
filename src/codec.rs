@@ -1,7 +1,7 @@
 //! Redis protocol codec
 use std::{
     cell::Cell, cmp, collections::HashMap, convert::TryFrom, fmt, hash::BuildHasher, hash::Hash,
-    str,
+    ops::Range, str,
 };
 
 use ntex_bytes::{BufMut, BytePageSize, BytePages, ByteString, Bytes, BytesMut};
@@ -237,6 +237,11 @@ macro_rules! impl_arg_float {
     ($($t:ty),*) => {$(
         impl Arg for $t {
             fn write_arg(self, w: &mut Writer<'_>) {
+                // integral values are written as integers, -0.0 keeps its sign
+                if self.fract() == 0.0 && self.abs() < 9_007_199_254_740_992.0 && !(self == 0.0 && self.is_sign_negative()) {
+                    w.bulk_int(self as i64);
+                    return;
+                }
                 let mut buf = FloatBuf { buf: [0; 32], len: 0 };
                 // shortest representation that round-trips, `inf` and `-inf` for infinity
                 if fmt::Write::write_fmt(&mut buf, format_args!("{self:?}")).is_ok() {
@@ -300,48 +305,64 @@ impl_args!(6; A, B, C, D, E, F);
 impl_args!(7; A, B, C, D, E, F, G);
 impl_args!(8; A, B, C, D, E, F, G, H);
 
-/// Command name and a variable number of arguments, written in advance
-pub(crate) struct ArgList {
-    name: &'static str,
+/// Fixed leading arguments and a variable number of trailing arguments
+///
+/// Head is written inline, trailing arguments are written in advance to
+/// a buffer that is allocated on first push.
+pub(crate) struct VarArgs<A> {
+    head: A,
     len: usize,
-    buf: BytePages,
+    buf: Option<BytePages>,
 }
+
+/// Command name and a variable number of arguments
+pub(crate) type ArgList = VarArgs<(&'static str,)>;
 
 impl ArgList {
     pub(crate) fn new(name: &'static str) -> Self {
-        ArgList {
-            name,
+        VarArgs::with_head((name,))
+    }
+}
+
+impl<A> VarArgs<A> {
+    pub(crate) fn with_head(head: A) -> Self {
+        VarArgs {
+            head,
             len: 0,
-            buf: BytePages::new(BytePageSize::Size4),
+            buf: None,
         }
     }
 
-    pub(crate) fn name(&self) -> &'static str {
-        self.name
-    }
-
-    pub(crate) fn set_name(&mut self, name: &'static str) {
-        self.name = name;
+    pub(crate) fn head_mut(&mut self) -> &mut A {
+        &mut self.head
     }
 
     pub(crate) fn push<T: Arg>(&mut self, val: T) {
         self.len += 1;
-        val.write_arg(&mut Writer::new(&mut self.buf));
+        let buf = self
+            .buf
+            .get_or_insert_with(|| BytePages::new(BytePageSize::Size4));
+        val.write_arg(&mut Writer::new(buf));
     }
+}
 
+impl<A: Args> VarArgs<A> {
+    /// Total number of arguments
     pub(crate) fn len(&self) -> usize {
-        self.len
+        A::LEN + self.len
     }
 
-    pub(crate) fn write(mut self, w: &mut Writer<'_>) {
-        w.array(self.len + 1);
-        w.arg(self.name);
-        self.buf.move_to(w.buf);
+    /// Write all arguments, without the array header
+    pub(crate) fn write_args(self, w: &mut Writer<'_>) {
+        self.head.write_args(w);
+        if let Some(mut buf) = self.buf {
+            buf.move_to(w.buf);
+        }
     }
 
-    /// Write arguments only, array header and command name must be written by caller
-    pub(crate) fn write_args(mut self, w: &mut Writer<'_>) {
-        self.buf.move_to(w.buf);
+    pub(crate) fn write(self, w: &mut Writer<'_>) {
+        w.array(self.len());
+        self.write_args(w);
     }
 }
 
@@ -498,16 +519,16 @@ impl Frame {
     /// Read floating point number, sent as a bulk or simple string
     #[inline]
     pub fn float(&mut self) -> Result<f64, CommandError> {
-        let data = match self.peek()? {
-            b'+' => self.read_line()?,
+        let range = match self.peek()? {
+            b'+' => self.line_range()?,
             b'$' => match self.header()? {
                 -1 => return Err(self.unexpected("Not a float")),
-                size => self.read_bulk(size)?,
+                size => self.bulk_range(size)?,
             },
             b'-' => return Err(self.read_error()),
             _ => return Err(self.unexpected("Not a float")),
         };
-        str::from_utf8(&data)
+        str::from_utf8(&self.buf[range])
             .ok()
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| self.unexpected("Not a float"))
@@ -612,15 +633,29 @@ impl Frame {
     /// Reads line after the type byte
     #[inline]
     fn read_line(&mut self) -> Result<Bytes, Error> {
+        let range = self.line_range()?;
+        Ok(self.buf.slice(range))
+    }
+
+    /// Reads line after the type byte, returns its position in the buffer
+    #[inline]
+    fn line_range(&mut self) -> Result<Range<usize>, Error> {
         let start = self.pos + 1;
         let end = find_crlf(&self.buf, start).ok_or_else(incomplete)?;
         self.pos = end + 2;
-        Ok(self.buf.slice(start..end))
+        Ok(start..end)
     }
 
     /// Reads bulk string payload of `size` bytes
     #[inline]
     fn read_bulk(&mut self, size: i64) -> Result<Bytes, Error> {
+        let range = self.bulk_range(size)?;
+        Ok(self.buf.slice(range))
+    }
+
+    /// Reads bulk string payload of `size` bytes, returns its position in the buffer
+    #[inline]
+    fn bulk_range(&mut self, size: i64) -> Result<Range<usize>, Error> {
         let start = self.pos;
         let end = usize::try_from(size)
             .ok()
@@ -630,7 +665,7 @@ impl Frame {
         match self.buf.get(end..end + 2) {
             Some(b"\r\n") => {
                 self.pos = end + 2;
-                Ok(self.buf.slice(start..end))
+                Ok(start..end)
             }
             Some(_) => Err(Error::Parse("Bulk string is not terminated by CRLF".into())),
             None => Err(incomplete()),
@@ -1661,11 +1696,12 @@ mod tests {
     #[test]
     fn test_arg_list() {
         let mut args = ArgList::new("LPUSH");
-        assert_eq!(args.name(), "LPUSH");
+        assert_eq!(args.len(), 1);
         args.push("key");
         args.push(vec![b'x'; 100]);
         args.push(-5i64);
-        args.set_name("LPUSHX");
+        args.head_mut().0 = "LPUSHX";
+        assert_eq!(args.len(), 4);
 
         let expected = obj_to_bytes(Request::Array(vec![
             Request::from_static("LPUSHX"),
@@ -1722,7 +1758,7 @@ mod tests {
         assert_eq!(f.array().unwrap(), Some(2));
         assert!(matches!(f.int(), Err(CommandError::Error(e)) if e == "ERR one"));
         assert!(matches!(
-            frame(b"-ERR two\r\n").decode::<crate::cmd::commands::KeysCommand>(),
+            frame(b"-ERR two\r\n").decode::<crate::cmd::commands::KeysCommand<&str>>(),
             Err(CommandError::Error(e)) if e == "ERR two"
         ));
         assert_eq!(
@@ -1957,7 +1993,19 @@ mod tests {
     #[test]
     fn test_float_arg() {
         assert_eq!(write_bytes(|w| w.args((1.5f64,))), resp(&["1.5"]));
-        assert_eq!(write_bytes(|w| w.args((-2.0f64,))), resp(&["-2.0"]));
+        assert_eq!(write_bytes(|w| w.args((-2.0f64,))), resp(&["-2"]));
+        assert_eq!(write_bytes(|w| w.args((0.0f64,))), resp(&["0"]));
+        assert_eq!(write_bytes(|w| w.args((-0.0f64,))), resp(&["-0.0"]));
+        assert_eq!(write_bytes(|w| w.args((3.0f32,))), resp(&["3"]));
+        assert_eq!(
+            write_bytes(|w| w.args((9_007_199_254_740_991.0f64,))),
+            resp(&["9007199254740991"])
+        );
+        assert_eq!(
+            write_bytes(|w| w.args((9_007_199_254_740_992.0f64,))),
+            resp(&["9007199254740992.0"])
+        );
+        assert_eq!(write_bytes(|w| w.args((f64::NAN,))), resp(&["NaN"]));
         assert_eq!(write_bytes(|w| w.args((0.25f32,))), resp(&["0.25"]));
         assert_eq!(write_bytes(|w| w.args((1e300f64,))), resp(&["1e300"]));
         assert_eq!(
@@ -2038,7 +2086,7 @@ mod tests {
         );
         assert_eq!(
             enc(cmd::ZAdd("k", 1.0, "a")),
-            resp(&["ZADD", "k", "1.0", "a"])
+            resp(&["ZADD", "k", "1", "a"])
         );
         assert_eq!(
             enc(cmd::ZAdd("k", 1.0, "a")
@@ -2046,11 +2094,11 @@ mod tests {
                 .if_exists()
                 .gt()
                 .ch()),
-            resp(&["ZADD", "k", "XX", "GT", "CH", "1.0", "a", "2.5", "b"])
+            resp(&["ZADD", "k", "XX", "GT", "CH", "1", "a", "2.5", "b"])
         );
         assert_eq!(
             enc(cmd::ZAdd("k", 1.0, "a").if_not_exists().lt()),
-            resp(&["ZADD", "k", "NX", "LT", "1.0", "a"])
+            resp(&["ZADD", "k", "NX", "LT", "1", "a"])
         );
         assert_eq!(
             enc(cmd::ZRange("k", "(1", "+inf")
@@ -2084,6 +2132,65 @@ mod tests {
             resp(&["SCAN", "5", "MATCH", "p*", "COUNT", "10", "TYPE", "hash"])
         );
         assert_eq!(enc(cmd::HScan("k", 0)), resp(&["HSCAN", "k", "0"]));
+        assert_eq!(enc(cmd::Scan(0)), resp(&["SCAN", "0"]));
+        assert_eq!(
+            enc(cmd::SScan("k", 1).count(5).pattern(b"a*".to_vec())),
+            resp(&["SSCAN", "k", "1", "MATCH", "a*", "COUNT", "5"])
+        );
+        assert_eq!(
+            enc(cmd::ZScan("k", 2).pattern("x")),
+            resp(&["ZSCAN", "k", "2", "MATCH", "x"])
+        );
+        assert_eq!(
+            enc(cmd::ZRange("k", 0, -1)),
+            resp(&["ZRANGE", "k", "0", "-1"])
+        );
+        assert_eq!(
+            enc(cmd::ZRange("k", 0, -1).with_scores()),
+            resp(&["ZRANGE", "k", "0", "-1", "WITHSCORES"])
+        );
+        assert_eq!(enc(cmd::LPos("k", "e")), resp(&["LPOS", "k", "e"]));
+        assert_eq!(
+            enc(cmd::LPos("k", "e").max_len(0)),
+            resp(&["LPOS", "k", "e", "MAXLEN", "0"])
+        );
+        assert_eq!(enc(cmd::SAdd("k", "a")), resp(&["SADD", "k", "a"]));
+        assert_eq!(
+            enc(cmd::SAdd("k", "a").member(1).members(["b", "c"])),
+            resp(&["SADD", "k", "a", "1", "b", "c"])
+        );
+        assert_eq!(enc(cmd::ZRem("k", "a")), resp(&["ZREM", "k", "a"]));
+        assert_eq!(enc(cmd::Del("a")), resp(&["DEL", "a"]));
+        assert_eq!(
+            enc(cmd::Del("a").key("b").keys(["c"])),
+            resp(&["DEL", "a", "b", "c"])
+        );
+        assert_eq!(
+            enc(cmd::HSet("k", "f", 1).entry("g", 2)),
+            resp(&["HSET", "k", "f", "1", "g", "2"])
+        );
+        assert_eq!(
+            enc(cmd::HDel("k", "f").remove("g")),
+            resp(&["HDEL", "k", "f", "g"])
+        );
+        assert_eq!(
+            enc(cmd::HMGet("k", "f").field("g")),
+            resp(&["HMGET", "k", "f", "g"])
+        );
+        assert_eq!(
+            enc(cmd::LPush("k", "a").value("b").if_exists()),
+            resp(&["LPUSHX", "k", "a", "b"])
+        );
+        assert_eq!(
+            enc(cmd::RPush("k", "a").if_exists()),
+            resp(&["RPUSHX", "k", "a"])
+        );
+        assert_eq!(enc(cmd::MGet("a").key("b")), resp(&["MGET", "a", "b"]));
+        assert_eq!(
+            enc(cmd::SMIsMember("k", "a").member("b")),
+            resp(&["SMISMEMBER", "k", "a", "b"])
+        );
+        assert_eq!(enc(cmd::SInter("a").key("b")), resp(&["SINTER", "a", "b"]));
         assert_eq!(enc(cmd::FlushAll()), resp(&["FLUSHALL"]));
         assert_eq!(
             enc(cmd::FlushAll().asynchronous()),
@@ -2110,8 +2217,16 @@ mod tests {
             Err(CommandError::Output(..))
         ));
 
-        assert!(frame(b"+OK\r\n").decode::<MSetCommand>().unwrap());
-        assert!(!frame(b":0\r\n").decode::<MSetCommand>().unwrap());
+        assert!(
+            frame(b"+OK\r\n")
+                .decode::<MSetCommand<&str, &str>>()
+                .unwrap()
+        );
+        assert!(
+            !frame(b":0\r\n")
+                .decode::<MSetCommand<&str, &str>>()
+                .unwrap()
+        );
 
         assert_eq!(
             frame(b":-1\r\n").decode::<PTtlCommand<&str>>().unwrap(),
@@ -2128,20 +2243,35 @@ mod tests {
 
         assert_eq!(
             frame(b"*2\r\n$1\r\na\r\n$-1\r\n")
-                .decode::<MGetCommand>()
+                .decode::<MGetCommand<&str>>()
                 .unwrap(),
             vec![Some(b("a")), None]
         );
         assert!(matches!(
-            frame(b"*-1\r\n").decode::<MGetCommand>(),
+            frame(b"*-1\r\n").decode::<MGetCommand<&str>>(),
             Err(CommandError::Output(..))
         ));
-        assert_eq!(frame(b"$-1\r\n").decode::<LPosCommand>().unwrap(), None);
-        assert_eq!(frame(b"*-1\r\n").decode::<LPosCommand>().unwrap(), None);
-        assert_eq!(frame(b":3\r\n").decode::<LPosCommand>().unwrap(), Some(3));
+        assert_eq!(
+            frame(b"$-1\r\n")
+                .decode::<LPosCommand<&str, &str>>()
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            frame(b"*-1\r\n")
+                .decode::<LPosCommand<&str, &str>>()
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            frame(b":3\r\n")
+                .decode::<LPosCommand<&str, &str>>()
+                .unwrap(),
+            Some(3)
+        );
         assert_eq!(
             frame(b"*3\r\n:1\r\n:0\r\n:1\r\n")
-                .decode::<SMIsMemberCommand>()
+                .decode::<SMIsMemberCommand<&str, &str>>()
                 .unwrap(),
             vec![true, false, true]
         );
@@ -2176,7 +2306,7 @@ mod tests {
             vec![(b("a"), 1.0), (b("b"), f64::INFINITY)]
         );
         assert!(matches!(
-            frame(b"*1\r\n$1\r\na\r\n").decode::<ZRangeWithScoresCommand>(),
+            frame(b"*1\r\n$1\r\na\r\n").decode::<ZRangeWithScoresCommand<&str, i64, i64>>(),
             Err(CommandError::Output(..))
         ));
 

@@ -2,7 +2,7 @@ use ntex_bytes::Bytes;
 use ntex_util::HashMap;
 
 use super::{Command, CommandError, utils};
-use crate::codec::{Arg, ArgList, Frame, Writer};
+use crate::codec::{Arg, Frame, VarArgs, Writer};
 
 /// HGET redis command
 ///
@@ -118,18 +118,14 @@ impl<T: Arg> Command for HGetAllCommand<T> {
 ///     Ok(())
 /// }
 /// ```
-pub fn HSet<T: Arg, K: Arg, V: Arg>(key: T, field: K, value: V) -> HSetCommand {
-    let mut args = ArgList::new("HSET");
-    args.push(key);
-    args.push(field);
-    args.push(value);
-    HSetCommand(args)
+pub fn HSet<T: Arg, K: Arg, V: Arg>(key: T, field: K, value: V) -> HSetCommand<T, K, V> {
+    HSetCommand(VarArgs::with_head(("HSET", key, field, value)))
 }
 
 /// HSET command, see [`HSet`](crate::cmd::HSet)
-pub struct HSetCommand(ArgList);
+pub struct HSetCommand<A, B, C>(VarArgs<(&'static str, A, B, C)>);
 
-impl HSetCommand {
+impl<A, B, C> HSetCommand<A, B, C> {
     /// Add another field and value to set
     pub fn entry<K: Arg, V: Arg>(mut self, field: K, value: V) -> Self {
         self.add_entry(field, value);
@@ -143,7 +139,7 @@ impl HSetCommand {
     }
 }
 
-impl Command for HSetCommand {
+impl<A: Arg, B: Arg, C: Arg> Command for HSetCommand<A, B, C> {
     type Output = usize;
 
     fn encode(self, w: &mut Writer<'_>) {
@@ -182,17 +178,14 @@ impl Command for HSetCommand {
 ///     Ok(())
 /// }
 /// ```
-pub fn HDel<T: Arg, K: Arg>(key: T, field: K) -> HDelCommand {
-    let mut args = ArgList::new("HDEL");
-    args.push(key);
-    args.push(field);
-    HDelCommand(args)
+pub fn HDel<T: Arg, K: Arg>(key: T, field: K) -> HDelCommand<T, K> {
+    HDelCommand(VarArgs::with_head(("HDEL", key, field)))
 }
 
 /// HDEL command, see [`HDel`](crate::cmd::HDel)
-pub struct HDelCommand(ArgList);
+pub struct HDelCommand<A, B>(VarArgs<(&'static str, A, B)>);
 
-impl HDelCommand {
+impl<A, B> HDelCommand<A, B> {
     /// Add another field to remove
     pub fn remove<K: Arg>(mut self, field: K) -> Self {
         self.0.push(field);
@@ -208,7 +201,7 @@ impl HDelCommand {
     }
 }
 
-impl Command for HDelCommand {
+impl<A: Arg, B: Arg> Command for HDelCommand<A, B> {
     type Output = usize;
 
     fn encode(self, w: &mut Writer<'_>) {
@@ -328,17 +321,14 @@ pub fn HIncrByFloat<T: Arg, K: Arg>(
 ///     Ok(())
 /// }
 /// ```
-pub fn HMGet<T: Arg, K: Arg>(key: T, field: K) -> HMGetCommand {
-    let mut args = ArgList::new("HMGET");
-    args.push(key);
-    args.push(field);
-    HMGetCommand(args)
+pub fn HMGet<T: Arg, K: Arg>(key: T, field: K) -> HMGetCommand<T, K> {
+    HMGetCommand(VarArgs::with_head(("HMGET", key, field)))
 }
 
 /// HMGET command, see [`HMGet`](crate::cmd::HMGet)
-pub struct HMGetCommand(ArgList);
+pub struct HMGetCommand<A, B>(VarArgs<(&'static str, A, B)>);
 
-impl HMGetCommand {
+impl<A, B> HMGetCommand<A, B> {
     /// Add a field to this command.
     pub fn field<K: Arg>(mut self, field: K) -> Self {
         self.0.push(field);
@@ -354,7 +344,7 @@ impl HMGetCommand {
     }
 }
 
-impl Command for HMGetCommand {
+impl<A: Arg, B: Arg> Command for HMGetCommand<A, B> {
     type Output = Vec<Option<Bytes>>;
 
     fn encode(self, w: &mut Writer<'_>) {
@@ -411,9 +401,6 @@ pub fn HStrLen<T: Arg, K: Arg>(key: T, field: K) -> utils::IntOutputCommand<(&'s
 ///
 /// Incrementally iterates over fields and values of the hash stored at `key`.
 /// See [`Scan`](crate::cmd::Scan) for the iteration semantics.
-pub fn HScan<T: Arg>(key: T, cursor: u64) -> utils::ScanCommand<(Bytes, Bytes)> {
-    let mut args = ArgList::new("HSCAN");
-    args.push(key);
-    args.push(cursor);
-    utils::ScanCommand::new(args)
+pub fn HScan<T: Arg>(key: T, cursor: u64) -> utils::ScanCommand<(Bytes, Bytes), T> {
+    utils::ScanCommand::new("HSCAN", Some(key), cursor)
 }

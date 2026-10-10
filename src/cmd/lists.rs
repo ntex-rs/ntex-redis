@@ -1,5 +1,5 @@
 use super::{Command, CommandError, utils};
-use crate::codec::{Arg, ArgList, Frame, Writer};
+use crate::codec::{Arg, Frame, VarArgs, Writer};
 
 /// LINDEX redis command
 ///
@@ -142,7 +142,7 @@ pub fn RPop<T: Arg>(key: T) -> utils::BulkOutputCommand<(&'static str, T)> {
 ///     Ok(())
 /// }
 /// ```
-pub fn LPush<T: Arg, V: Arg>(key: T, value: V) -> LPushCommand {
+pub fn LPush<T: Arg, V: Arg>(key: T, value: V) -> LPushCommand<T, V> {
     LPushCommand::new("LPUSH", key, value)
 }
 
@@ -175,28 +175,25 @@ pub fn LPush<T: Arg, V: Arg>(key: T, value: V) -> LPushCommand {
 ///     Ok(())
 /// }
 /// ```
-pub fn RPush<T: Arg, V: Arg>(key: T, value: V) -> LPushCommand {
+pub fn RPush<T: Arg, V: Arg>(key: T, value: V) -> LPushCommand<T, V> {
     LPushCommand::new("RPUSH", key, value)
 }
 
 /// LPUSH and RPUSH command, see [`LPush`] and [`RPush`]
-pub struct LPushCommand(ArgList);
+pub struct LPushCommand<A, B>(VarArgs<(&'static str, A, B)>);
 
-impl LPushCommand {
-    fn new<T: Arg, V: Arg>(name: &'static str, key: T, value: V) -> Self {
-        let mut args = ArgList::new(name);
-        args.push(key);
-        args.push(value);
-        LPushCommand(args)
+impl<A, B> LPushCommand<A, B> {
+    fn new(name: &'static str, key: A, value: B) -> Self {
+        LPushCommand(VarArgs::with_head((name, key, value)))
     }
 
     /// Inserts specified values only if key already exists and holds a list.
     pub fn if_exists(mut self) -> Self {
-        let cmd = match self.0.name() {
+        let cmd = match self.0.head_mut().0 {
             "LPUSH" | "LPUSHX" => "LPUSHX",
             _ => "RPUSHX",
         };
-        self.0.set_name(cmd);
+        self.0.head_mut().0 = cmd;
         self
     }
 
@@ -215,7 +212,7 @@ impl LPushCommand {
     }
 }
 
-impl Command for LPushCommand {
+impl<A: Arg, B: Arg> Command for LPushCommand<A, B> {
     type Output = usize;
 
     fn encode(self, w: &mut Writer<'_>) {
@@ -378,37 +375,53 @@ impl<T: Arg, P: Arg, V: Arg> Command for LInsertCommand<T, P, V> {
 ///     Ok(())
 /// }
 /// ```
-pub fn LPos<T: Arg, V: Arg>(key: T, element: V) -> LPosCommand {
-    let mut args = ArgList::new("LPOS");
-    args.push(key);
-    args.push(element);
-    LPosCommand(args)
+pub fn LPos<T: Arg, V: Arg>(key: T, element: V) -> LPosCommand<T, V> {
+    LPosCommand {
+        key,
+        element,
+        rank: None,
+        max_len: None,
+    }
 }
 
 /// LPOS command, see [`LPos`](crate::cmd::LPos)
-pub struct LPosCommand(ArgList);
+pub struct LPosCommand<T, V> {
+    key: T,
+    element: V,
+    rank: Option<i64>,
+    max_len: Option<usize>,
+}
 
-impl LPosCommand {
+impl<T, V> LPosCommand<T, V> {
     /// Return the `rank`-th match, negative rank searches from the tail
     pub fn rank(mut self, rank: i64) -> Self {
-        self.0.push("RANK");
-        self.0.push(rank);
+        self.rank = Some(rank);
         self
     }
 
     /// Compare at most `len` elements, `0` means no limit
     pub fn max_len(mut self, len: usize) -> Self {
-        self.0.push("MAXLEN");
-        self.0.push(len);
+        self.max_len = Some(len);
         self
     }
 }
 
-impl Command for LPosCommand {
+impl<T: Arg, V: Arg> Command for LPosCommand<T, V> {
     type Output = Option<usize>;
 
     fn encode(self, w: &mut Writer<'_>) {
-        self.0.write(w);
+        w.array(3 + 2 * (usize::from(self.rank.is_some()) + usize::from(self.max_len.is_some())));
+        w.arg("LPOS");
+        w.arg(self.key);
+        w.arg(self.element);
+        if let Some(rank) = self.rank {
+            w.arg("RANK");
+            w.arg(rank);
+        }
+        if let Some(len) = self.max_len {
+            w.arg("MAXLEN");
+            w.arg(len);
+        }
     }
 
     fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {

@@ -3,7 +3,7 @@ use std::{marker::PhantomData, str};
 use ntex_bytes::{ByteString, Bytes};
 
 use super::{Command, CommandError};
-use crate::codec::{Arg, ArgList, Args, Frame, Writer};
+use crate::codec::{Arg, Args, Frame, Writer};
 
 /// Generic command that returns an optional bulk string
 ///
@@ -136,52 +136,103 @@ impl<A: Args> Command for ListOutputCommand<A> {
 ///
 /// Output is the next cursor and a batch of items, iteration is complete
 /// when returned cursor is `0`.
-pub struct ScanCommand<I> {
-    args: ArgList,
+pub struct ScanCommand<I, K = &'static str, P = &'static str, T = &'static str> {
+    name: &'static str,
+    key: Option<K>,
+    cursor: u64,
+    pattern: Option<P>,
+    count: Option<usize>,
+    key_type: Option<T>,
     _t: PhantomData<fn() -> I>,
 }
 
-impl<I> ScanCommand<I> {
-    pub(crate) fn new(args: ArgList) -> Self {
+impl<I, K> ScanCommand<I, K> {
+    pub(crate) fn new(name: &'static str, key: Option<K>, cursor: u64) -> Self {
         ScanCommand {
-            args,
+            name,
+            key,
+            cursor,
+            pattern: None,
+            count: None,
+            key_type: None,
             _t: PhantomData,
         }
     }
+}
 
+impl<I, K, P, T> ScanCommand<I, K, P, T> {
     /// Only return elements that match the glob-style pattern
-    pub fn pattern<T: Arg>(mut self, pattern: T) -> Self {
-        self.args.push("MATCH");
-        self.args.push(pattern);
-        self
+    pub fn pattern<P2: Arg>(self, pattern: P2) -> ScanCommand<I, K, P2, T> {
+        ScanCommand {
+            name: self.name,
+            key: self.key,
+            cursor: self.cursor,
+            pattern: Some(pattern),
+            count: self.count,
+            key_type: self.key_type,
+            _t: PhantomData,
+        }
     }
 
     /// Amount of work that should be done at every call, default is 10
     ///
     /// It is a hint, redis may return more or fewer elements.
     pub fn count(mut self, count: usize) -> Self {
-        self.args.push("COUNT");
-        self.args.push(count);
+        self.count = Some(count);
         self
     }
 }
 
-impl ScanCommand<Bytes> {
+impl<K, P, T> ScanCommand<Bytes, K, P, T> {
     /// Only return keys of the given type, e.g. `string`, `list` or `hash`
     ///
     /// Supported by [`Scan`](crate::cmd::Scan) only.
-    pub fn key_type<T: Arg>(mut self, key_type: T) -> Self {
-        self.args.push("TYPE");
-        self.args.push(key_type);
-        self
+    pub fn key_type<T2: Arg>(self, key_type: T2) -> ScanCommand<Bytes, K, P, T2> {
+        ScanCommand {
+            name: self.name,
+            key: self.key,
+            cursor: self.cursor,
+            pattern: self.pattern,
+            count: self.count,
+            key_type: Some(key_type),
+            _t: PhantomData,
+        }
     }
 }
 
-impl Command for ScanCommand<Bytes> {
+impl<I, K: Arg, P: Arg, T: Arg> ScanCommand<I, K, P, T> {
+    fn write(self, w: &mut Writer<'_>) {
+        w.array(
+            2 + usize::from(self.key.is_some())
+                + 2 * (usize::from(self.pattern.is_some())
+                    + usize::from(self.count.is_some())
+                    + usize::from(self.key_type.is_some())),
+        );
+        w.arg(self.name);
+        if let Some(key) = self.key {
+            w.arg(key);
+        }
+        w.arg(self.cursor);
+        if let Some(pattern) = self.pattern {
+            w.arg("MATCH");
+            w.arg(pattern);
+        }
+        if let Some(count) = self.count {
+            w.arg("COUNT");
+            w.arg(count);
+        }
+        if let Some(key_type) = self.key_type {
+            w.arg("TYPE");
+            w.arg(key_type);
+        }
+    }
+}
+
+impl<K: Arg, P: Arg, T: Arg> Command for ScanCommand<Bytes, K, P, T> {
     type Output = (u64, Vec<Bytes>);
 
     fn encode(self, w: &mut Writer<'_>) {
-        self.args.write(w);
+        self.write(w);
     }
 
     fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
@@ -189,11 +240,11 @@ impl Command for ScanCommand<Bytes> {
     }
 }
 
-impl Command for ScanCommand<(Bytes, Bytes)> {
+impl<K: Arg, P: Arg, T: Arg> Command for ScanCommand<(Bytes, Bytes), K, P, T> {
     type Output = (u64, Vec<(Bytes, Bytes)>);
 
     fn encode(self, w: &mut Writer<'_>) {
-        self.args.write(w);
+        self.write(w);
     }
 
     fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {
@@ -201,11 +252,11 @@ impl Command for ScanCommand<(Bytes, Bytes)> {
     }
 }
 
-impl Command for ScanCommand<(Bytes, f64)> {
+impl<K: Arg, P: Arg, T: Arg> Command for ScanCommand<(Bytes, f64), K, P, T> {
     type Output = (u64, Vec<(Bytes, f64)>);
 
     fn encode(self, w: &mut Writer<'_>) {
-        self.args.write(w);
+        self.write(w);
     }
 
     fn decode(frame: &mut Frame) -> Result<Self::Output, CommandError> {

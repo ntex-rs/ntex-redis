@@ -1,7 +1,7 @@
 use ntex_bytes::{ByteString, Bytes};
 
 use super::{Command, CommandError, utils};
-use crate::codec::{Arg, ArgList, Frame, Writer};
+use crate::codec::{Arg, Frame, VarArgs, Writer};
 
 /// DEL redis command
 ///
@@ -31,7 +31,7 @@ use crate::codec::{Arg, ArgList, Frame, Writer};
 ///     Ok(())
 /// }
 /// ```
-pub fn Del<T: Arg>(key: T) -> KeysCommand {
+pub fn Del<T: Arg>(key: T) -> KeysCommand<T> {
     KeysCommand::new("DEL", key)
 }
 
@@ -64,7 +64,7 @@ pub fn Del<T: Arg>(key: T) -> KeysCommand {
 ///     Ok(())
 /// }
 /// ```
-pub fn Exists<T: Arg>(key: T) -> KeysCommand {
+pub fn Exists<T: Arg>(key: T) -> KeysCommand<T> {
     KeysCommand::new("EXISTS", key)
 }
 
@@ -72,7 +72,7 @@ pub fn Exists<T: Arg>(key: T) -> KeysCommand {
 ///
 /// Removes the specified keys like [`Del`], memory is reclaimed
 /// asynchronously. Returns the number of keys that were unlinked.
-pub fn Unlink<T: Arg>(key: T) -> KeysCommand {
+pub fn Unlink<T: Arg>(key: T) -> KeysCommand<T> {
     KeysCommand::new("UNLINK", key)
 }
 
@@ -80,20 +80,18 @@ pub fn Unlink<T: Arg>(key: T) -> KeysCommand {
 ///
 /// Alters the last access time of the keys. Returns the number of keys
 /// that were touched.
-pub fn Touch<T: Arg>(key: T) -> KeysCommand {
+pub fn Touch<T: Arg>(key: T) -> KeysCommand<T> {
     KeysCommand::new("TOUCH", key)
 }
 
 /// DEL, EXISTS, UNLINK and TOUCH command, see [`Del`](crate::cmd::Del),
 /// [`Exists`](crate::cmd::Exists), [`Unlink`](crate::cmd::Unlink)
 /// and [`Touch`](crate::cmd::Touch)
-pub struct KeysCommand(ArgList);
+pub struct KeysCommand<A>(VarArgs<(&'static str, A)>);
 
-impl KeysCommand {
-    fn new<T: Arg>(name: &'static str, key: T) -> Self {
-        let mut args = ArgList::new(name);
-        args.push(key);
-        KeysCommand(args)
+impl<A> KeysCommand<A> {
+    fn new(name: &'static str, key: A) -> Self {
+        KeysCommand(VarArgs::with_head((name, key)))
     }
 
     /// Add a key to this command.
@@ -111,7 +109,7 @@ impl KeysCommand {
     }
 }
 
-impl Command for KeysCommand {
+impl<A: Arg> Command for KeysCommand<A> {
     type Output = usize;
 
     fn encode(self, w: &mut Writer<'_>) {
@@ -382,9 +380,7 @@ pub fn RenameNx<T: Arg, N: Arg>(
 /// }
 /// ```
 pub fn Scan(cursor: u64) -> utils::ScanCommand<Bytes> {
-    let mut args = ArgList::new("SCAN");
-    args.push(cursor);
-    utils::ScanCommand::new(args)
+    utils::ScanCommand::new("SCAN", None, cursor)
 }
 
 /// KEYS redis command
