@@ -1,5 +1,6 @@
-use super::{utils, Command, CommandError};
-use ntex::util::{Bytes, Either};
+use super::{Command, CommandError, utils};
+use ntex_bytes::Bytes;
+use ntex_util::future::Either;
 use std::convert::TryFrom;
 
 use crate::codec::{BulkString, Request, Response};
@@ -71,7 +72,7 @@ impl TryFrom<Response> for SubscribeItem {
                     return Err(CommandError::Output(
                         "Array needs to be 3 or 4 elements",
                         Response::Array(ary),
-                    ))
+                    ));
                 }
             },
             _ => return Err(CommandError::Output("Unexpected value", val)),

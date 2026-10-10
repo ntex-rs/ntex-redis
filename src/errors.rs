@@ -1,24 +1,23 @@
 //! Redis protocol related errors
 use std::io;
 
-use derive_more::{Display, From};
-use ntex::{connect, util::ByteString, util::Either};
+use ntex_bytes::ByteString;
+use ntex_net::connect;
+use ntex_util::future::Either;
 
 use super::codec::Response;
 
-#[derive(Debug, Display)]
+#[derive(Debug, thiserror::Error)]
 /// Redis protocol errors
 pub enum Error {
     /// A RESP parsing error occurred
-    #[display(fmt = "Redis server response error: {}", _0)]
+    #[error("Redis server response error: {0}")]
     Parse(String),
 
     /// An IO error occurred
-    #[display(fmt = "Io error: {:?}", _0)]
+    #[error("Io error: {0:?}")]
     PeerGone(Option<io::Error>),
 }
-
-impl std::error::Error for Error {}
 
 impl Clone for Error {
     fn clone(&self) -> Self {
@@ -44,36 +43,49 @@ impl From<Either<Error, io::Error>> for Error {
     }
 }
 
-#[derive(Debug, Display, From, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 /// Redis connectivity errors
 pub enum ConnectError {
     /// Auth command failed
+    #[error("Unauthorized")]
     Unauthorized,
 
     /// Command execution error
-    Command(CommandError),
+    #[error(transparent)]
+    Command(#[from] CommandError),
 
     /// Io connectivity error
-    Connect(connect::ConnectError),
+    #[error(transparent)]
+    Connect(#[from] ntex_error::Error<connect::ConnectError>),
 }
 
-impl std::error::Error for ConnectError {}
-
-#[derive(Debug, Display, From, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 /// Redis command execution errors
 pub enum CommandError {
     /// A redis server error response
+    #[error("{0}")]
     Error(ByteString),
 
     /// A command response parse error
-    #[display(fmt = "Command output parse error: {}", _0)]
+    #[error("Command output parse error: {0}")]
     Output(&'static str, Response),
 
     /// Redis protocol level errors
-    Protocol(Error),
+    #[error(transparent)]
+    Protocol(#[from] Error),
 }
 
-impl std::error::Error for CommandError {}
+impl From<ByteString> for CommandError {
+    fn from(err: ByteString) -> CommandError {
+        CommandError::Error(err)
+    }
+}
+
+impl From<(&'static str, Response)> for CommandError {
+    fn from((msg, resp): (&'static str, Response)) -> CommandError {
+        CommandError::Output(msg, resp)
+    }
+}
 
 impl From<Either<Error, io::Error>> for CommandError {
     fn from(err: Either<Error, io::Error>) -> CommandError {

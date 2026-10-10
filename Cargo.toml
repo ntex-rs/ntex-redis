@@ -1,6 +1,6 @@
 [package]
 name = "ntex-redis"
-version = "2.0.0"
+version = "3.0.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Redis client"
 documentation = "https://docs.rs/ntex-redis"
@@ -9,16 +9,23 @@ categories = ["network-programming"]
 keywords = ["ntex", "redis"]
 license = "MIT OR Apache-2.0"
 exclude = [".gitignore", ".travis.yml", ".cargo/config"]
-edition = "2018"
+edition = "2024"
+rust-version = "1.97"
 
 [dependencies]
-ntex = "2"
+ntex-bytes = "1.11"
+ntex-codec = "2.0"
+ntex-error = "3.0"
+ntex-io = "4.3"
+ntex-net = "4.4"
+ntex-service = "5.2"
+ntex-util = "4.3"
 itoa = "1.0"
 btoi = "0.4"
 log = "0.4"
-derive_more = "0.99"
+thiserror = "2"
 
 [dev-dependencies]
-rand = "0.8"
+rand = "0.9"
 env_logger = "0.11"
-ntex = { version = "2", features = ["tokio"] }
+ntex = { version = "4.2", features = ["tokio"] }

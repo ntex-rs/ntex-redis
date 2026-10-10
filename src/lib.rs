@@ -4,10 +4,10 @@
 //!
 //! ```rust
 //! use ntex_redis::{cmd, RedisConnector};
-//! # use rand::{thread_rng, Rng};
-//! # use rand::distributions::Alphanumeric;
+//! # use rand::{Rng, rng};
+//! # use rand::distr::Alphanumeric;
 //! # fn gen_random_key() -> String {
-//! # let key: String = thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect();
+//! # let key: String = rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect();
 //! # key
 //! # }
 //!
@@ -77,10 +77,10 @@ macro_rules! array {
 
 #[cfg(test)]
 pub fn gen_random_key() -> String {
-    use rand::distributions::Alphanumeric;
-    use rand::{thread_rng, Rng};
+    use rand::distr::Alphanumeric;
+    use rand::{Rng, rng};
 
-    let key: String = thread_rng()
+    let key: String = rng()
         .sample_iter(&Alphanumeric)
         .take(12)
         .map(char::from)

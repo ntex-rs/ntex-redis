@@ -1,4 +1,4 @@
-use ntex_redis::{cmd, RedisConnector};
+use ntex_redis::{RedisConnector, cmd};
 use std::error::Error;
 
 #[ntex::main]

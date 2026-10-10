@@ -1,4 +1,4 @@
-use ntex::util::ByteString;
+use ntex_bytes::ByteString;
 
 use super::{Command, CommandError};
 use crate::codec::{Request, Response};

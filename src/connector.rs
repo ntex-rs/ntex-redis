@@ -1,37 +1,36 @@
-use ntex::connect::{self, Address, Connect, Connector};
-use ntex::service::{Pipeline, Service};
-use ntex::{io::IoBoxed, time::Seconds, util::ByteString, util::PoolId, util::PoolRef};
+use ntex_bytes::ByteString;
+use ntex_error::Error;
+use ntex_io::IoBoxed;
+use ntex_net::connect::{self, Address, Connect, Connector};
+use ntex_service::{IntoService, Service, cfg::SharedCfg, pipeline::PipelineState};
 
-use super::{cmd, errors::ConnectError, Client, SimpleClient};
+use super::{Client, SimpleClient, cmd, errors::ConnectError};
+
+type ConnectorPipeline<A> =
+    PipelineState<SharedCfg, Connect<A>, IoBoxed, Error<connect::ConnectError>>;
 
 /// Redis connector
-pub struct RedisConnector<A, T> {
+pub struct RedisConnector<A> {
     address: A,
-    connector: Pipeline<T>,
+    connector: ConnectorPipeline<A>,
+    config: SharedCfg,
     passwords: Vec<ByteString>,
-    pool: PoolRef,
 }
 
-impl<A> RedisConnector<A, ()>
+impl<A> RedisConnector<A>
 where
     A: Address + Clone,
 {
-    #[allow(clippy::new_ret_no_self)]
     /// Create new redis connector
-    pub fn new(address: A) -> RedisConnector<A, Connector<A>> {
+    pub fn new(address: A) -> RedisConnector<A> {
         RedisConnector {
             address,
+            connector: PipelineState::new(Connector::default().map(IoBoxed::from)),
+            config: SharedCfg::default(),
             passwords: Vec::new(),
-            connector: Pipeline::new(Connector::default()),
-            pool: PoolId::P7.pool_ref(),
         }
     }
-}
 
-impl<A, T> RedisConnector<A, T>
-where
-    A: Address + Clone,
-{
     /// Add redis auth password
     pub fn password<U>(mut self, password: U) -> Self
     where
@@ -42,44 +41,30 @@ where
         self
     }
 
-    /// Set memory pool.
+    /// Set configuration for the connector and connection io.
     ///
-    /// Use specified memory pool for memory allocations. By default P7
-    /// memory pool is used.
-    pub fn memory_pool(mut self, id: PoolId) -> Self {
-        self.pool = id.pool_ref();
+    /// By default [`SharedCfg::default()`] is used.
+    pub fn config<U: Into<SharedCfg>>(mut self, config: U) -> Self {
+        self.config = config.into();
         self
     }
 
     /// Use custom connector
-    pub fn connector<U>(self, connector: U) -> RedisConnector<A, U>
+    pub fn connector<U, F>(mut self, connector: F) -> Self
     where
-        U: Service<Connect<A>, Error = connect::ConnectError>,
-        IoBoxed: From<U::Response>,
+        F: IntoService<U, SharedCfg, Connect<A>>,
+        U: Service<SharedCfg, Connect<A>, Error = Error<connect::ConnectError>> + 'static,
+        IoBoxed: From<U::Res>,
     {
-        RedisConnector {
-            connector: Pipeline::new(connector),
-            address: self.address,
-            passwords: self.passwords,
-            pool: self.pool,
-        }
+        self.connector = PipelineState::new(connector.into_service().map(IoBoxed::from));
+        self
     }
-}
 
-impl<A, T> RedisConnector<A, T>
-where
-    A: Address + Clone,
-    T: Service<Connect<A>, Error = connect::ConnectError>,
-    IoBoxed: From<T::Response>,
-{
     async fn _connect(&self) -> Result<IoBoxed, ConnectError> {
-        let io: IoBoxed = self
+        let io = self
             .connector
-            .call(Connect::new(self.address.clone()))
-            .await?
-            .into();
-        io.set_memory_pool(self.pool);
-        io.set_disconnect_timeout(Seconds::ZERO);
+            .call(Connect::new(self.address.clone()), &self.config)
+            .await?;
 
         if self.passwords.is_empty() {
             Ok(io)
