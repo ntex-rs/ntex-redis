@@ -1,8 +1,9 @@
 //! Redis protocol codec
 use std::{cmp, collections::HashMap, convert::TryFrom, hash::BuildHasher, hash::Hash, str};
 
-use ntex::codec::{Decoder, Encoder};
-use ntex::util::{Buf, BufMut, ByteString, Bytes, BytesMut};
+use ntex_bytes::{Buf, BufMut, BytePages, ByteString, Bytes, BytesMut};
+use ntex_codec::{Decoder, Encoder};
+use ntex_util::hash_map::HashMap as HashbrownMap;
 
 use super::errors::Error;
 
@@ -13,30 +14,30 @@ impl Encoder for Codec {
     type Item = Request;
     type Error = Error;
 
-    fn encode(&self, msg: Request, buf: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&self, msg: Request, buf: &mut BytePages) -> Result<(), Self::Error> {
         match msg {
             Request::Array(ary) => {
-                write_header(b'*', ary.len() as i64, buf, 0);
+                write_header(b'*', ary.len() as i64, buf);
                 for v in ary {
                     self.encode(v, buf)?;
                 }
             }
             Request::BulkString(bstr) => {
                 let len = bstr.0.len();
-                write_header(b'$', len as i64, buf, len + 2);
-                buf.extend_from_slice(&bstr.0[..]);
+                write_header(b'$', len as i64, buf);
+                buf.append(bstr.0);
                 write_rn(buf);
             }
             Request::BulkStatic(bstr) => {
                 let len = bstr.len();
-                write_header(b'$', len as i64, buf, len + 2);
-                buf.extend_from_slice(bstr);
+                write_header(b'$', len as i64, buf);
+                buf.append(Bytes::from_static(bstr));
                 write_rn(buf);
             }
             Request::BulkInteger(i) => {
                 let mut buffer = itoa::Buffer::new();
                 let rendered = buffer.format(i);
-                write_header(b'$', rendered.len() as i64, buf, rendered.len() + 2);
+                write_header(b'$', rendered.len() as i64, buf);
                 buf.extend_from_slice(rendered.as_bytes());
                 write_rn(buf);
             }
@@ -45,7 +46,7 @@ impl Encoder for Codec {
             }
             Request::Integer(val) => {
                 // Simple integer are just the header
-                write_header(b':', val, buf, 0);
+                write_header(b':', val, buf);
             }
         }
         Ok(())
@@ -464,35 +465,42 @@ where
     }
 }
 
-impl<K, T, S> TryFrom<Response> for HashMap<K, T, S>
-where
-    K: TryFrom<Response, Error = (&'static str, Response)> + Hash + Eq,
-    T: TryFrom<Response, Error = (&'static str, Response)>,
-    S: BuildHasher + Default,
-{
-    type Error = (&'static str, Response);
+macro_rules! impl_tryfrom_hashmap {
+    ($map:ident) => {
+        impl<K, T, S> TryFrom<Response> for $map<K, T, S>
+        where
+            K: TryFrom<Response, Error = (&'static str, Response)> + Hash + Eq,
+            T: TryFrom<Response, Error = (&'static str, Response)>,
+            S: BuildHasher + Default,
+        {
+            type Error = (&'static str, Response);
 
-    fn try_from(val: Response) -> Result<HashMap<K, T, S>, Self::Error> {
-        match val {
-            Response::Array(ary) => {
-                let mut map = HashMap::with_capacity_and_hasher(ary.len() / 2, S::default());
-                let mut items = ary.into_iter();
+            fn try_from(val: Response) -> Result<$map<K, T, S>, Self::Error> {
+                match val {
+                    Response::Array(ary) => {
+                        let mut map = $map::with_capacity_and_hasher(ary.len() / 2, S::default());
+                        let mut items = ary.into_iter();
 
-                while let Some(k) = items.next() {
-                    let key = K::try_from(k)?;
-                    let value = T::try_from(items.next().ok_or((
-                        "Cannot convert an odd number of elements into a hashmap",
-                        Response::Nil,
-                    ))?)?;
-                    map.insert(key, value);
+                        while let Some(k) = items.next() {
+                            let key = K::try_from(k)?;
+                            let value = T::try_from(items.next().ok_or((
+                                "Cannot convert an odd number of elements into a hashmap",
+                                Response::Nil,
+                            ))?)?;
+                            map.insert(key, value);
+                        }
+
+                        Ok(map)
+                    }
+                    _ => Err(("Cannot be converted into a hashmap", val)),
                 }
-
-                Ok(map)
             }
-            _ => Err(("Cannot be converted into a hashmap", val)),
         }
-    }
+    };
 }
+
+impl_tryfrom_hashmap!(HashMap);
+impl_tryfrom_hashmap!(HashbrownMap);
 
 macro_rules! impl_tryfrom_integers {
     ($($int_ty:ident),* $(,)*) => {
@@ -503,11 +511,11 @@ macro_rules! impl_tryfrom_integers {
 
                 fn try_from(val: Response) -> Result<Self, Self::Error> {
                     i64::try_from(val).and_then(|x| {
-                        // $int_ty::max_value() as i64 > 0 should be optimized out. It tests if
+                        // $int_ty::MAX as i64 > 0 should be optimized out. It tests if
                         // the target integer type needs an "upper bounds" check
-                        if x < ($int_ty::min_value() as i64)
-                            || ($int_ty::max_value() as i64 > 0
-                                && x > ($int_ty::max_value() as i64))
+                        if x < ($int_ty::MIN as i64)
+                            || ($int_ty::MAX as i64 > 0
+                                && x > ($int_ty::MAX as i64))
                         {
                             Err((
                                 concat!(
@@ -528,22 +536,20 @@ macro_rules! impl_tryfrom_integers {
 
 impl_tryfrom_integers!(isize, usize, i32, u32, u64);
 
-fn write_rn(buf: &mut BytesMut) {
+fn write_rn(buf: &mut BytePages) {
     buf.extend_from_slice(b"\r\n");
 }
 
-fn write_header(symb: u8, len: i64, buf: &mut BytesMut, body_size: usize) {
+fn write_header(symb: u8, len: i64, buf: &mut BytePages) {
     let mut len_buf = itoa::Buffer::new();
     let rendered = len_buf.format(len);
-    buf.reserve(3 + rendered.len() + body_size);
     buf.put_u8(symb);
     buf.extend_from_slice(rendered.as_bytes());
     write_rn(buf);
 }
 
-fn write_string(symb: u8, string: &str, buf: &mut BytesMut) {
+fn write_string(symb: u8, string: &str, buf: &mut BytePages) {
     let bytes = string.as_bytes();
-    buf.reserve(3 + bytes.len());
     buf.put_u8(symb);
     buf.extend_from_slice(bytes);
     write_rn(buf);
@@ -596,7 +602,7 @@ fn decode_bytes(buf: &mut BytesMut, idx: usize) -> DecodeResult {
                 return Ok(None);
             }
             buf.advance(pos);
-            Ok(Some((2, Response::Bytes(buf.split_to(size).freeze()))))
+            Ok(Some((2, Response::Bytes(buf.split_to(size)))))
         }
         Some((_, size)) => Err(Error::Parse(format!("Invalid string size: {}", size))),
         None => Ok(None),
@@ -612,11 +618,7 @@ fn is_array_ready_to_decode(
     let mut pos = idx;
 
     // counting beginning of array items in buffer by `\r\n<type>`
-    loop {
-        let Some(new_pos) = buf[pos..].windows(2).position(|w| w.starts_with(b"\r\n")) else {
-            break;
-        };
-
+    while let Some(new_pos) = buf[pos..].windows(2).position(|w| w.starts_with(b"\r\n")) {
         if pos + new_pos + 2 >= buf.len() {
             break;
         }
@@ -636,7 +638,7 @@ fn is_array_ready_to_decode(
                     1
                 }
                 Ok(Some((_, size))) => {
-                    return Err(Error::Parse(format!("Invalid array size: {}", size)))
+                    return Err(Error::Parse(format!("Invalid array size: {}", size)));
                 }
                 _ => 0,
             },
@@ -727,16 +729,17 @@ fn scan_string(buf: &mut BytesMut, idx: usize) -> Result<Option<(usize, ByteStri
 mod tests {
     use std::convert::TryFrom;
 
-    use ntex::codec::{Decoder, Encoder};
-    use ntex::util::{ByteString, Bytes, BytesMut, HashMap};
+    use ntex_bytes::{ByteString, Bytes, BytesMut};
+    use ntex_codec::{Decoder, Encoder};
+    use ntex_util::HashMap;
 
     use super::*;
     use crate::array;
 
     fn obj_to_bytes(obj: Request) -> Bytes {
-        let mut bytes = BytesMut::new();
-        Codec.encode(obj, &mut bytes).unwrap();
-        bytes.freeze()
+        let mut pages = BytePages::default();
+        Codec.encode(obj, &mut pages).unwrap();
+        pages.freeze()
     }
 
     #[test]
@@ -764,9 +767,8 @@ mod tests {
     #[test]
     fn test_bulk_string() {
         let req_object = Request::BulkString(Bytes::from_static(b"THISISATEST").into());
-        let mut bytes = BytesMut::new();
+        let mut bytes = BytesMut::copy_from_slice(obj_to_bytes(req_object));
         let codec = Codec;
-        codec.encode(req_object.clone(), &mut bytes).unwrap();
         assert_eq!(b"$11\r\nTHISISATEST\r\n".to_vec(), bytes.to_vec());
 
         let resp_object = Response::Bytes(Bytes::from_static(b"THISISATEST"));
@@ -775,11 +777,27 @@ mod tests {
     }
 
     #[test]
+    fn test_large_bulk_string() {
+        let data = Bytes::from(vec![b'x'; 64 * 1024]);
+        let bytes = obj_to_bytes(array!["SET", "key", data.clone()]);
+        let mut expected = b"*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$65536\r\n".to_vec();
+        expected.extend_from_slice(&data);
+        expected.extend_from_slice(b"\r\n");
+        assert_eq!(bytes, &expected[..]);
+
+        let data = &*Vec::leak(vec![b'y'; 8 * 1024]);
+        let bytes = obj_to_bytes(Request::BulkStatic(data));
+        let mut expected = b"$8192\r\n".to_vec();
+        expected.extend_from_slice(data);
+        expected.extend_from_slice(b"\r\n");
+        assert_eq!(bytes, &expected[..]);
+    }
+
+    #[test]
     fn test_array() {
         let req_object = Request::Array(vec![b"TEST1".as_ref().into(), b"TEST2".as_ref().into()]);
-        let mut bytes = BytesMut::new();
+        let mut bytes = BytesMut::copy_from_slice(obj_to_bytes(req_object));
         let codec = Codec;
-        codec.encode(req_object.clone(), &mut bytes).unwrap();
         assert_eq!(
             b"*2\r\n$5\r\nTEST1\r\n$5\r\nTEST2\r\n".to_vec(),
             bytes.to_vec()
@@ -867,7 +885,7 @@ mod tests {
 
     #[test]
     fn test_integer_overflow() {
-        let resp_object = Response::Integer(i64::max_value());
+        let resp_object = Response::Integer(i64::MAX);
         let res = i32::try_from(resp_object);
         assert!(res.is_err());
     }
@@ -888,14 +906,8 @@ mod tests {
     #[test]
     fn test_hashmap_conversion() {
         let mut expected = HashMap::default();
-        expected.insert(
-            ByteString::from("KEY1").into(),
-            ByteString::from("VALUE1").into(),
-        );
-        expected.insert(
-            ByteString::from("KEY2").into(),
-            ByteString::from("VALUE2").into(),
-        );
+        expected.insert(ByteString::from("KEY1"), ByteString::from("VALUE1"));
+        expected.insert(ByteString::from("KEY2"), ByteString::from("VALUE2"));
 
         let resp_object = Response::Array(vec![
             Response::String(ByteString::from_static("KEY1")),

@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
-use std::{cell::RefCell, fmt, future::poll_fn, rc::Rc, task::Poll};
+use std::{cell::RefCell, fmt, future::poll_fn, rc::Rc, task::Poll, task::ready};
 
-use ntex::io::{IoBoxed, IoRef, OnDisconnect, RecvError};
-use ntex::util::ready;
-use ntex::{channel::pool, service::Service, service::ServiceCtx};
+use ntex_io::{IoBoxed, IoRef, RecvError};
+use ntex_service::{Ctx, Service};
+use ntex_util::channel::pool;
 
 use super::cmd::Command;
 use super::codec::{Codec, Request, Response};
@@ -16,7 +16,6 @@ type Queue = Rc<RefCell<VecDeque<pool::Sender<Result<Response, Error>>>>>;
 pub struct Client {
     io: IoRef,
     queue: Queue,
-    disconnect: OnDisconnect,
     pool: pool::Pool<Result<Response, Error>>,
 }
 
@@ -27,50 +26,48 @@ impl Client {
         // read redis response task
         let io_ref = io.get_ref();
         let queue2 = queue.clone();
-        ntex::rt::spawn(async move {
-            poll_fn(|cx| loop {
-                match ready!(io.poll_recv(&Codec, cx)) {
-                    Ok(item) => {
-                        if let Some(tx) = queue2.borrow_mut().pop_front() {
-                            let _ = tx.send(Ok(item));
-                        } else {
-                            log::error!("Unexpected redis response: {:?}", item);
-                        }
-                        continue;
-                    }
-                    Err(RecvError::KeepAlive) | Err(RecvError::Stop) => {
-                        unreachable!()
-                    }
-                    Err(RecvError::WriteBackpressure) => {
-                        if ready!(io.poll_flush(cx, false)).is_err() {
-                            return Poll::Ready(());
-                        } else {
+        ntex_util::spawn(async move {
+            poll_fn(|cx| {
+                loop {
+                    match ready!(io.poll_recv(&Codec, cx)) {
+                        Ok(item) => {
+                            if let Some(tx) = queue2.borrow_mut().pop_front() {
+                                let _ = tx.send(Ok(item));
+                            } else {
+                                log::error!("Unexpected redis response: {item:?}");
+                            }
                             continue;
                         }
-                    }
-                    Err(RecvError::Decoder(e)) => {
-                        if let Some(tx) = queue2.borrow_mut().pop_front() {
-                            let _ = tx.send(Err(e));
+                        // client io does not use dispatcher timers
+                        Err(RecvError::Timeout) => continue,
+                        Err(RecvError::WriteBackpressure) => {
+                            if ready!(io.poll_flush(cx, false)).is_err() {
+                                return Poll::Ready(());
+                            } else {
+                                continue;
+                            }
                         }
-                        queue2.borrow_mut().clear();
-                        let _ = ready!(io.poll_shutdown(cx));
-                        return Poll::Ready(());
-                    }
-                    Err(RecvError::PeerGone(e)) => {
-                        log::info!("Redis connection is dropped: {:?}", e);
-                        queue2.borrow_mut().clear();
-                        return Poll::Ready(());
+                        Err(RecvError::Decoder(e)) => {
+                            if let Some(tx) = queue2.borrow_mut().pop_front() {
+                                let _ = tx.send(Err(e));
+                            }
+                            queue2.borrow_mut().clear();
+                            let _ = ready!(io.poll_shutdown(cx));
+                            return Poll::Ready(());
+                        }
+                        Err(RecvError::PeerGone(e)) => {
+                            log::info!("Redis connection is dropped: {e:?}");
+                            queue2.borrow_mut().clear();
+                            return Poll::Ready(());
+                        }
                     }
                 }
             })
             .await
         });
 
-        let disconnect = io_ref.on_disconnect();
-
         Client {
             queue,
-            disconnect,
             io: io_ref,
             pool: pool::new(),
         }
@@ -116,22 +113,19 @@ impl Client {
     }
 }
 
-impl Service<Request> for Client {
-    type Response = Response;
+impl<St> Service<St, Request> for Client {
+    type Res = Response;
     type Error = Error;
 
-    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        poll_fn(|cx| {
-            if self.disconnect.poll_ready(cx).is_ready() {
-                Poll::Ready(Err(Error::PeerGone(None)))
-            } else {
-                Poll::Ready(Ok(()))
-            }
-        })
-        .await
+    async fn ready(&self, _: Ctx<'_, Self, St>) -> Result<(), Self::Error> {
+        if self.io.is_closed() {
+            Err(Error::PeerGone(None))
+        } else {
+            Ok(())
+        }
     }
 
-    async fn call(&self, req: Request, _: ServiceCtx<'_, Self>) -> Result<Response, Error> {
+    async fn call(&self, req: Request, _: Ctx<'_, Self, St>) -> Result<Response, Error> {
         self._call(req).await
     }
 }

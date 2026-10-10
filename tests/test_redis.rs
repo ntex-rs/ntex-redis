@@ -1,6 +1,6 @@
 use ntex::util::{Bytes, HashMap};
-use ntex_redis::{cmd, Client, RedisConnector};
-use rand::{distributions::Alphanumeric, thread_rng, Rng};
+use ntex_redis::{Client, RedisConnector, cmd};
+use rand::{Rng, distr::Alphanumeric, rng};
 use std::time::{Duration, SystemTime};
 
 async fn connect() -> Client {
@@ -11,7 +11,7 @@ async fn connect() -> Client {
 }
 
 fn new_key() -> String {
-    thread_rng()
+    rng()
         .sample_iter(&Alphanumeric)
         .take(12)
         .map(char::from)
@@ -38,7 +38,7 @@ async fn test_auth_simple() {
 
 #[ntex::test]
 async fn test_strings() {
-    env_logger::init();
+    let _ = env_logger::try_init();
     let redis = connect().await;
     let key = new_key();
     let result = redis.exec(cmd::Set(&key, "1")).await.unwrap();

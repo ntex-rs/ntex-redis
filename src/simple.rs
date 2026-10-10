@@ -1,10 +1,11 @@
 use std::pin::Pin;
-use std::{future::poll_fn, task::Context, task::Poll};
+use std::{future::poll_fn, task::Context, task::Poll, task::ready};
 
-use super::cmd::{commands::PubSubCommand, commands::SubscribeOutputCommand, Command};
+use super::cmd::{Command, commands::PubSubCommand, commands::SubscribeOutputCommand};
 use super::codec::Codec;
 use super::errors::{CommandError, Error};
-use ntex::{io::IoBoxed, io::RecvError, util::ready, util::Stream};
+use ntex_io::{IoBoxed, RecvError};
+use ntex_util::Stream;
 
 /// Redis client
 pub struct SimpleClient {
@@ -63,27 +64,28 @@ impl SimpleClient {
         &self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<U::Output, CommandError>>> {
-        match ready!(self.io.poll_recv(&Codec, cx)) {
-            Ok(item) => match item.into_result() {
-                Ok(result) => Poll::Ready(Some(U::to_output(result))),
-                Err(err) => Poll::Ready(Some(Err(CommandError::Error(err)))),
-            },
-            Err(RecvError::KeepAlive) | Err(RecvError::Stop) => {
-                unreachable!()
-            }
-            Err(RecvError::WriteBackpressure) => {
-                if let Err(err) = ready!(self.io.poll_flush(cx, false))
-                    .map_err(|e| CommandError::Protocol(Error::PeerGone(Some(e))))
-                {
-                    Poll::Ready(Some(Err(err)))
-                } else {
-                    Poll::Pending
+        loop {
+            return match ready!(self.io.poll_recv(&Codec, cx)) {
+                Ok(item) => match item.into_result() {
+                    Ok(result) => Poll::Ready(Some(U::to_output(result))),
+                    Err(err) => Poll::Ready(Some(Err(CommandError::Error(err)))),
+                },
+                // client io does not use dispatcher timers
+                Err(RecvError::Timeout) => continue,
+                Err(RecvError::WriteBackpressure) => {
+                    if let Err(err) = ready!(self.io.poll_flush(cx, false)) {
+                        Poll::Ready(Some(Err(CommandError::Protocol(Error::PeerGone(Some(
+                            err,
+                        ))))))
+                    } else {
+                        continue;
+                    }
                 }
-            }
-            Err(RecvError::Decoder(err)) => Poll::Ready(Some(Err(CommandError::Protocol(err)))),
-            Err(RecvError::PeerGone(err)) => {
-                Poll::Ready(Some(Err(CommandError::Protocol(Error::PeerGone(err)))))
-            }
+                Err(RecvError::Decoder(err)) => Poll::Ready(Some(Err(CommandError::Protocol(err)))),
+                Err(RecvError::PeerGone(err)) => {
+                    Poll::Ready(Some(Err(CommandError::Protocol(Error::PeerGone(err)))))
+                }
+            };
         }
     }
 }
@@ -143,10 +145,7 @@ impl<U: Command + PubSubCommand> SubscriptionClient<U> {
     /// Attempt to pull out the next value of this stream, registering
     /// the current task for wakeup if the value is not yet available,
     /// and returning None if the payload is exhausted.
-    pub fn poll_recv(
-        &self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<U::Output, CommandError>>> {
+    pub fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Option<Result<U::Output, CommandError>>> {
         self.client.poll_recv::<U>(cx)
     }
 }

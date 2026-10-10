@@ -1,8 +1,8 @@
 use std::convert::{TryFrom, TryInto};
 
-use ntex::util::ByteString;
+use ntex_bytes::ByteString;
 
-use super::{utils, Command, CommandError};
+use super::{Command, CommandError, utils};
 use crate::codec::{BulkString, Request, Response};
 
 /// DEL redis command
@@ -11,9 +11,9 @@ use crate::codec::{BulkString, Request, Response};
 ///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
-/// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
+/// # use rand::{Rng, distr::Alphanumeric, rng};
 /// # fn gen_random_key() -> String {
-/// #    thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
+/// #    rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
 /// # }
 ///
 /// #[ntex::main]
@@ -49,9 +49,9 @@ where
 ///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
-/// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
+/// # use rand::{Rng, distr::Alphanumeric, rng};
 /// # fn gen_random_key() -> String {
-/// #    thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
+/// #    rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
 /// # }
 ///
 /// #[ntex::main]
@@ -193,9 +193,9 @@ impl Command for TtlCommand {
 ///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
-/// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
+/// # use rand::{Rng, distr::Alphanumeric, rng};
 /// # fn gen_random_key() -> String {
-/// #    thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
+/// #    rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
 /// # }
 ///
 /// #[ntex::main]

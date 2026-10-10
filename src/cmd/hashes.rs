@@ -1,8 +1,9 @@
 use std::convert::TryFrom;
 
-use ntex::util::{Bytes, HashMap};
+use ntex_bytes::Bytes;
+use ntex_util::HashMap;
 
-use super::{utils, Command, CommandError};
+use super::{Command, CommandError, utils};
 use crate::codec::{BulkString, Request, Response};
 
 /// HGET redis command
@@ -11,9 +12,9 @@ use crate::codec::{BulkString, Request, Response};
 ///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
-/// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
+/// # use rand::{Rng, distr::Alphanumeric, rng};
 /// # fn gen_random_key() -> String {
-/// #    thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
+/// #    rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
 /// # }
 ///
 /// #[ntex::main]
@@ -75,9 +76,9 @@ impl Command for HGetAllCommand {
 ///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
-/// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
+/// # use rand::{Rng, distr::Alphanumeric, rng};
 /// # fn gen_random_key() -> String {
-/// #    thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
+/// #    rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
 /// # }
 ///
 /// #[ntex::main]
@@ -151,9 +152,9 @@ impl Command for HSetCommand {
 ///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
-/// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
+/// # use rand::{Rng, distr::Alphanumeric, rng};
 /// # fn gen_random_key() -> String {
-/// #    thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
+/// #    rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
 /// # }
 ///
 /// #[ntex::main]
@@ -225,9 +226,9 @@ impl Command for HDelCommand {
 ///
 /// ```rust
 /// use ntex_redis::{cmd, RedisConnector};
-/// # use rand::{thread_rng, Rng, distributions::Alphanumeric};
+/// # use rand::{Rng, distr::Alphanumeric, rng};
 /// # fn gen_random_key() -> String {
-/// #    thread_rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
+/// #    rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect::<String>()
 /// # }
 ///
 /// #[ntex::main]

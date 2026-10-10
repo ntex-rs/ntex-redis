@@ -1,4 +1,4 @@
-use super::{utils, Command, CommandError};
+use super::{Command, CommandError, utils};
 use crate::codec::{BulkString, Request, Response};
 
 /// GET redis command

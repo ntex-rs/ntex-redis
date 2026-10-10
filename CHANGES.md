@@ -1,5 +1,21 @@
 # Changes
 
+## [3.0.0] - 2026-xx-xx
+
+* Migrate to ntex 4, depend on individual ntex crates instead of `ntex`
+
+* `RedisConnector` has single type parameter, add `RedisConnector::config()`
+
+* Remove `RedisConnector::memory_pool()`
+
+* `ConnectError::Connect` wraps `ntex::error::Error<ConnectError>`
+
+* Replace `derive_more` with `thiserror`
+
+* Large bulk strings are encoded without copying
+
+* Fix `SimpleClient` hang on write backpressure
+
 ## [2.0.0] - 2024-05-28
 
 * Use ntex-service 3.0
